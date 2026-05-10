@@ -14,7 +14,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from core.logging import get_logger, LogContexts
 from db.session import get_db_session
 from db.repositories import UserRepository
-from integrations.telegram.bot import create_dispatcher
+
+# Import shared dispatcher from bot to avoid creating separate instance
+from integrations.telegram.bot import dispatcher
 
 logger = get_logger(LogContexts.TELEGRAM)
 
@@ -30,9 +32,6 @@ THERAPIST_TRAITS = [
 
 DEFAULT_THERAPIST_NAME = "Опора"
 DEFAULT_THERAPIST_GENDER = "female"
-
-
-dispatcher = create_dispatcher()
 
 
 @dataclass
@@ -115,8 +114,20 @@ def build_traits_keyboard(selected_traits: list[str]) -> InlineKeyboardMarkup:
 async def start_prescreening(message: types.Message) -> None:
     """Start prescreening flow for user."""
     user_id = message.from_user.id
-    
+
     logger.info("prescreening_started", user_id=user_id)
+
+    # Ensure user exists in database
+    async with get_db_session() as session:
+        user_repo = UserRepository(session)
+        user = await user_repo.get_by_telegram_id(user_id)
+        if not user:
+            user = await user_repo.create_from_telegram(
+                telegram_id=user_id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+            )
     
     # Initialize state
     state = PrescreeningState()
@@ -216,15 +227,17 @@ async def _ask_traits(message: types.Message, state: PrescreeningState) -> None:
 
 
 async def _complete_prescreening(
-    message: types.Message, 
-    state: PrescreeningState
+    message: types.Message,
+    state: PrescreeningState,
+    user_id: int | None = None
 ) -> None:
     """Save prescreening data and complete."""
-    user_id = message.from_user.id
-    
+    # Use provided user_id or fall back to message (for backwards compatibility)
+    actual_user_id = user_id if user_id is not None else message.from_user.id
+
     logger.info(
         "prescreening_completing",
-        user_id=user_id,
+        user_id=actual_user_id,
         therapist_name=state.therapist_name,
         therapist_gender=state.therapist_gender,
         traits_count=len(state.selected_traits),
@@ -233,8 +246,8 @@ async def _complete_prescreening(
     # Save to database
     async with get_db_session() as session:
         user_repo = UserRepository(session)
-        user = await user_repo.get_by_telegram_id(user_id)
-        
+        user = await user_repo.get_by_telegram_id(actual_user_id)
+
         if user:
             await user_repo.update_prescreening_profile(
                 user_id=user.id,
@@ -245,12 +258,12 @@ async def _complete_prescreening(
                 therapist_traits=state.selected_traits,
                 mark_complete=True,
             )
-            logger.info("prescreening_saved", user_id=user_id, db_user_id=user.id)
+            logger.info("prescreening_saved", user_id=actual_user_id, db_user_id=user.id)
         else:
-            logger.error("user_not_found_for_prescreening", telegram_id=user_id)
-    
+            logger.error("user_not_found_for_prescreening", telegram_id=actual_user_id)
+
     # Clear state
-    clear_prescreening_state(user_id)
+    clear_prescreening_state(actual_user_id)
     
     # Confirm completion
     gender_label = "Женский" if state.therapist_gender == "female" else "Мужской"
@@ -276,11 +289,11 @@ async def on_skip_name(callback: types.CallbackQuery) -> None:
     """Handle Skip button for therapist name."""
     user_id = callback.from_user.id
     state = get_prescreening_state(user_id)
-    
+
     if not state or state.step != "awaiting_therapist_name":
         await callback.answer("Устаревшая кнопка")
         return
-    
+
     await callback.answer("Пропущено")
     await _ask_gender(callback.message, state)
 
@@ -340,17 +353,20 @@ async def on_traits_done(callback: types.CallbackQuery) -> None:
     """Handle completion of traits selection."""
     user_id = callback.from_user.id
     state = get_prescreening_state(user_id)
-    
+
     if not state or state.step != "awaiting_traits_selection":
         await callback.answer("Устаревшая кнопка")
         return
-    
+
     if not state.selected_traits:
         await callback.answer("Выберите хотя бы одну черту")
         return
-    
+
+    # Mark as processing to prevent double-clicks
+    state.step = "processing_completion"
+
     await callback.answer("Готово!")
-    await _complete_prescreening(callback.message, state)
+    await _complete_prescreening(callback.message, state, user_id=user_id)
 
 
 async def check_and_handle_prescreening(message: types.Message) -> bool:

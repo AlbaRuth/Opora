@@ -8,7 +8,7 @@ from aiogram import types
 from aiogram.filters import Command
 
 from core.logging import get_logger, LogContexts
-from integrations.telegram.bot import create_dispatcher
+from integrations.telegram.bot import dispatcher
 from integrations.telegram.prescreening import (
     check_and_handle_prescreening,
     is_in_prescreening,
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from services.dialogue_service import DialogueService
 
 logger = get_logger(LogContexts.TELEGRAM)
-dispatcher = create_dispatcher()
 
 
 @dispatcher.message(Command("start"))

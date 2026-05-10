@@ -11,6 +11,9 @@ from core.logging import get_logger, LogContexts
 
 logger = get_logger(LogContexts.TELEGRAM)
 
+# Create single shared dispatcher instance
+dispatcher = Dispatcher()
+
 
 def create_bot() -> Bot:
     """Create and configure Telegram bot."""
@@ -28,7 +31,7 @@ def create_bot() -> Bot:
 
 def create_dispatcher() -> Dispatcher:
     """Create aiogram dispatcher."""
-    return Dispatcher()
+    return dispatcher
 
 
 async def setup_bot_on_startup(bot: Bot) -> None:
