@@ -1,0 +1,88 @@
+################################################################################
+# Opora - Docker Compose Configuration
+# -----------------------------------------------------------------------------
+# Сервисы:
+#   - postgres: PostgreSQL 15 для хранения данных
+#
+# Использование:
+#   1. Скопируйте .env.example в .env и настройте переменные
+#   2. Запустите: docker-compose up -d
+#   3. Примените миграции: python scripts/migrate.py upgrade
+#   4. Запустите бота: python bot_runner.py
+#
+# Для запуска бота в контейнере раскомментируйте сервис bot ниже
+# (миграции выполнятся автоматически перед стартом)
+#
+# Переменные окружения читаются из .env файла автоматически
+################################################################################
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: opora-postgres
+    restart: unless-stopped
+    environment:
+      # Читаем значения из .env или используем дефолтные
+      POSTGRES_DB: ${POSTGRES_DB:-opora}
+      POSTGRES_USER: ${POSTGRES_USER:-opora}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opora}
+      # Настройки PostgreSQL для production
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5437}:5432"
+    volumes:
+      - opora_postgres_data:/var/lib/postgresql/data
+      # Опционально: скрипты инициализации
+      - ./scripts/docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opora} -d ${POSTGRES_DB:-opora}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - opora-network
+    # Лимиты ресурсов для production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # Opora Bot (опционально — можно запускать и без Docker)
+  # Раскомментируйте для запуска бота в контейнере
+  # bot:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: opora-bot
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     # Переопределяем DATABASE_URL для использования postgres сервиса
+  #     DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-opora}:${POSTGRES_PASSWORD:-opora}@postgres:5432/${POSTGRES_DB:-opora}
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   networks:
+  #     - opora-network
+  #   volumes:
+  #     - ./logs:/app/logs
+  #     - ./.env:/app/.env:ro
+  #     - ./alembic:/app/alembic:ro
+  #   # Выполняем миграции перед запуском бота
+  #   command: >
+  #     sh -c "alembic upgrade head && python bot_runner.py"
+
+volumes:
+  opora_postgres_data:
+    driver: local
+
+networks:
+  opora-network:
+    driver: bridge

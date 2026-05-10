@@ -1,0 +1,449 @@
+"""
+TherapistEvaluator - preserved logic from original Opora.
+All prompts and evaluation logic kept exactly as in original.
+"""
+
+import json
+import re
+from typing import Any, Dict, List, Optional
+
+from core.config import get_settings
+from core.logging import get_logger, LogContexts
+from integrations.openrouter import OpenRouterClient
+from agents.prompts.evaluator_prompts import EvaluatorPrompts
+from db.session import get_db_session
+from db.repositories import SessionRepository, MessageRepository, DecisionLogRepository
+
+logger = get_logger(LogContexts.AGENT)
+
+
+class TherapistEvaluator:
+    """
+    Evaluates therapy sessions and patient responses.
+    Original logic from Opora agent/evaluation.py preserved.
+    """
+    
+    def __init__(self):
+        self.settings = get_settings()
+        self.llm_client = OpenRouterClient()
+        self._last_session_memory: Optional[Dict] = None
+        self._all_sessions_memory: Optional[List[Dict]] = None
+        self._strategy_counter = {}
+        self._current_session_num: int = 1
+    
+    def _parse_response(self, response: Any) -> Any:
+        """Parse LLM response - handles both string and object responses."""
+        if isinstance(response, str):
+            cleaned = re.sub(r'^\s*```(json)?|```\s*$', '', response, flags=re.IGNORECASE).strip()
+            if cleaned.startswith('{') and cleaned.endswith('}'):
+                return json.loads(cleaned)
+            return cleaned
+        return response
+    
+    async def _call_llm(
+        self,
+        prompt: str,
+        task_name: str,
+        max_tokens: int = 200,
+        temperature: float = 0.7,
+    ) -> str:
+        """Call LLM with logging."""
+        result = await self.llm_client.simple_completion(
+            prompt=prompt,
+            system_message=EvaluatorPrompts.EVALUATOR_SYSTEM,
+            model=self.settings.llm_evaluator_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            task_name=task_name,
+        )
+        return result
+    
+    async def _log_agent_call(
+        self,
+        user_id: int,
+        task_name: str,
+        prompt: str,
+        response: str,
+        session_id: int | None = None,
+    ) -> None:
+        """Log agent call to database."""
+        try:
+            async with get_db_session() as db_session:
+                from db.repositories import AgentLogRepository
+                repo = AgentLogRepository(db_session)
+                await repo.log_llm_call(
+                    user_id=user_id,
+                    agent_type="evaluator",
+                    task_name=task_name,
+                    model=self.settings.llm_evaluator_model,
+                    temperature=self.settings.llm_evaluator_temperature,
+                    max_tokens=self.settings.llm_evaluator_max_tokens,
+                    prompt=prompt[:5000] if prompt else None,  # Truncate if too long
+                    response=response[:5000] if response else None,
+                    session_id=session_id,
+                )
+        except Exception as e:
+            logger.warning("failed_to_log_agent_call", error=str(e))
+    
+    async def evaluate_client_reaction(
+        self,
+        patient_input: str,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> bool:
+        """
+        Evaluate if patient is rejecting or deviating from topic.
+        Original logic from evaluation.py lines 156-180.
+        """
+        prompt = EvaluatorPrompts.CLIENT_REACTION.format(patient_input=patient_input)
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="evaluate_client_reaction",
+            max_tokens=5,
+            temperature=0.0,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="evaluate_client_reaction",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        if isinstance(response, str):
+            return response.lower() == "true"
+        return False
+    
+    async def assess_emotion(
+        self,
+        patient_input: str,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Assess primary emotion and intensity.
+        Original logic from evaluation.py lines 183-205.
+        """
+        prompt = EvaluatorPrompts.EMOTION_ASSESSMENT.format(patient_input=patient_input)
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="assess_emotion",
+            max_tokens=50,
+            temperature=0.3,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="assess_emotion",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        try:
+            result = self._parse_response(response)
+            return {
+                "primary_emotion": result.get("primary_emotion", ""),
+                "emotional_intensity": float(result.get("emotional_intensity", 0.0)),
+            }
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning("failed_to_parse_emotion", error=str(e), response=response)
+            return {
+                "primary_emotion": "",
+                "emotional_intensity": 0.0,
+            }
+    
+    async def update_response_strategy(
+        self,
+        emotion_data: Dict[str, Any],
+        is_rejecting: bool,
+        patient_input: str,
+        patient_id: str,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Update response strategy based on emotion and rejection.
+        Original logic from evaluation.py lines 207-262.
+        """
+        # Get strategy memory for this session
+        session_strategy_memory = await self._get_session_strategy_memory(session_id)
+        
+        primary_emotion = emotion_data.get('primary_emotion', 'unknown')
+        emotional_intensity = f"{emotion_data.get('emotional_intensity', 0.0):.1f}"
+        
+        prompt = EvaluatorPrompts.get_strategy_prompt(
+            patient_input=patient_input,
+            primary_emotion=primary_emotion,
+            emotional_intensity=float(emotional_intensity),
+            is_rejecting=is_rejecting,
+            session_strategy_memory=session_strategy_memory,
+        )
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="update_response_strategy",
+            max_tokens=100,
+            temperature=0.5,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="update_response_strategy",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        try:
+            result = self._parse_response(response)
+            return {
+                "strategy": result.get("strategy", ""),
+                "strategy_text": result.get("strategy_text", ""),
+            }
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning("failed_to_parse_strategy", error=str(e), response=response)
+            return {
+                "strategy": "",
+                "strategy_text": "",
+            }
+    
+    async def _get_session_strategy_memory(
+        self,
+        session_id: int | None,
+    ) -> str:
+        """Get list of strategies used in current session."""
+        if not session_id:
+            return "No strategy memory available"
+        
+        try:
+            async with get_db_session() as db_session:
+                repo = DecisionLogRepository(db_session)
+                strategies = await repo.get_strategies_used_in_session(session_id)
+                
+                if not strategies:
+                    return "No strategy memory available"
+                
+                return f"Strategies used in this session: {', '.join(strategies)}"
+        except Exception:
+            return "No strategy memory available"
+    
+    async def should_use_memory(
+        self,
+        all_sessions_memory: Dict[str, Dict],
+        patient_input: str,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> str:
+        """
+        Determine if historical memory should be used.
+        Original logic from evaluation.py lines 335-357.
+        """
+        all_dialogs = []
+        for session in all_sessions_memory.values():
+            all_dialogs.extend(session.get("dialogs", []))
+        
+        prompt = EvaluatorPrompts.MEMORY_USAGE.format(
+            all_dialogs=all_dialogs,
+            patient_input=patient_input,
+        )
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="should_use_memory",
+            max_tokens=110,
+            temperature=0.3,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="should_use_memory",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        return response if response else "No need to consider historical conversation memory"
+    
+    async def should_end_session(
+        self,
+        patient_input: str,
+        dialog_count: int,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> bool:
+        """
+        Determine if session should end.
+        Original logic from evaluation.py lines 360-372.
+        """
+        prompt = EvaluatorPrompts.SESSION_END.format(patient_input=patient_input)
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="should_end_session",
+            max_tokens=5,
+            temperature=0.0,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="should_end_session",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        return response.strip().lower() == "true"
+    
+    async def evaluate_therapy_progress(
+        self,
+        last_session_memory: Dict,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Evaluate therapy progress and suggest new therapy.
+        Original logic from evaluation.py lines 265-294.
+        """
+        full_dialogs = last_session_memory.get("dialogs", [])
+        last_therapy = last_session_memory.get("therapy", "")
+        last_dialogs_str = '\n'.join(full_dialogs)
+        
+        prompt = EvaluatorPrompts.THERAPY_PROGRESS.format(
+            last_therapy=last_therapy,
+            last_dialogs=last_dialogs_str,
+        )
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="evaluate_therapy_progress",
+            max_tokens=150,
+            temperature=0.3,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="evaluate_therapy_progress",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        try:
+            result = self._parse_response(response)
+            return {
+                "new_therapy": result.get("new_therapy", "cognitive-behavioral therapy"),
+                "reason": result.get("reason", "maintain the original therapy"),
+            }
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.warning("failed_to_parse_therapy_progress", error=str(e))
+            return {
+                "new_therapy": "cognitive-behavioral therapy",
+                "reason": "maintain the original therapy",
+            }
+    
+    async def determine_treatment_stage(
+        self,
+        all_sessions_memory: Dict[str, Dict],
+        current_therapy: str,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> str:
+        """
+        Determine current treatment stage.
+        Original logic from evaluation.py lines 296-316.
+        """
+        all_dialogs = []
+        for session in all_sessions_memory.values():
+            all_dialogs.extend(session.get("dialogs", []))
+        
+        prompt = EvaluatorPrompts.TREATMENT_STAGE.format(
+            current_therapy=current_therapy,
+            all_dialogs=all_dialogs,
+        )
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="determine_treatment_stage",
+            max_tokens=120,
+            temperature=0.3,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="determine_treatment_stage",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        return response if response else "Cannot determine the current treatment stage"
+    
+    async def select_initial_therapy(
+        self,
+        patient_record: Dict,
+        user_id: int,
+        session_id: int | None = None,
+    ) -> str:
+        """
+        Select initial therapy based on patient record.
+        Original logic from evaluation.py lines 320-333.
+        """
+        import json
+        medical_record = json.dumps(patient_record, ensure_ascii=False, indent=2)
+        
+        prompt = EvaluatorPrompts.INITIAL_THERAPY.format(medical_record=medical_record)
+        
+        response = await self._call_llm(
+            prompt=prompt,
+            task_name="select_initial_therapy",
+            max_tokens=40,
+            temperature=0.3,
+        )
+        
+        await self._log_agent_call(
+            user_id=user_id,
+            task_name="select_initial_therapy",
+            prompt=prompt,
+            response=response,
+            session_id=session_id,
+        )
+        
+        return response.rstrip('。.') if response else "cognitive-behavioral therapy"
+    
+    async def cross_session_evaluate(
+        self,
+        user_id: int,
+        sessions_data: Dict[str, Dict],
+        patient_record: Dict,
+        session_id: int | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Cross-session evaluation to determine therapy.
+        Original logic from evaluation.py lines 106-133.
+        """
+        if not sessions_data:
+            # First session
+            initial_therapy = await self.select_initial_therapy(
+                patient_record, user_id, session_id
+            )
+            return {
+                "new_therapy": initial_therapy,
+                "reason": "This is the first conversation, the initial therapy is selected based on the patient's medical record.",
+            }
+        
+        # Get last session
+        last_session_num = len(sessions_data)
+        last_session = sessions_data.get(f"session_{last_session_num}", {})
+        
+        evaluation = await self.evaluate_therapy_progress(
+            last_session, user_id, session_id
+        )
+        
+        return {
+            "new_therapy": evaluation.get("new_therapy", "cognitive-behavioral therapy"),
+            "reason": evaluation.get("reason", "maintain the original therapy"),
+        }
