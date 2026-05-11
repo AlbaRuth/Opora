@@ -3,6 +3,7 @@ Prompt templates for IntakeAgent.
 All control instructions are in English; patient-facing text is Russian.
 NEW: Includes address_mode (formal/informal) for controlling tone (ты/вы).
 NEW: Added contextual memory, anti-repetition rules, and adaptive response length.
+NEW: 4 distinct communication styles (friendly, soft, business, motivating) with dynamic switching.
 """
 
 import json
@@ -25,21 +26,97 @@ class IntakePrompts:
         "Скажи, пожалуйста",
     ]
 
+    # NEW: 4 distinct communication styles for intake with clear behavioral guidelines
+    STYLE_GUIDELINES = {
+        "friendly": {
+            "description": "Дружелюбный — теплый, открытый тон для установления контакта",
+            "language_markers": [
+                "Теплые, разговорные формулировки",
+                "Легкие вопросы о повседневном",
+                "Искренний интерес: 'Мне важно узнать...'",
+                "Мягкие переходы: 'Знаешь, давай поговорим о...'",
+            ],
+            "intake_focus": "Начало intake, общие вопросы, установление доверия, нейтральное настроение",
+        },
+        "soft": {
+            "description": "Мягкий — спокойный, умиротворяющий тон для чувствительных тем",
+            "language_markers": [
+                "Очень мягкие формулировки",
+                "Частое использование: 'Все нормально', 'Ты в безопасности'",
+                "Неторопливый темп, троеточия для пауз",
+                "Акцент на принятии без оценки",
+            ],
+            "intake_focus": "Чувствительные темы (травмы, эмоциональная боль), высокая тревога, слезы, страх",
+        },
+        "business": {
+            "description": "Деловой — структурированный, ясный тон для сбора фактов",
+            "language_markers": [
+                "Четкие, конкретные вопросы",
+                "Структура: 'Расскажи, когда это началось → что происходит → как влияет'",
+                "Фокус на фактах, симптомах, времени",
+                "Без лишних эмоциональных вставок",
+            ],
+            "intake_focus": "Сбор медицинской/психологической истории, конкретные симптомы, даты, частота",
+        },
+        "motivating": {
+            "description": "Мотивирующий — энергичный, верящий в силы тон для изменений",
+            "language_markers": [
+                "Акцент на ресурсах: 'Я вижу, как ты справляешься'",
+                "Вера в возможности изменений",
+                "Вопросы о желаемом будущем",
+                "Маленькие шаги и прогресс",
+            ],
+            "intake_focus": "Обсуждение целей, желание изменений, поиск решений, подготовка к терапии",
+        },
+    }
+
     @staticmethod
     def get_system_message(
         therapist_name: str = "Опора",
         therapist_gender: str = "female",
-        therapist_traits: list[str] | None = None,
+        therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
     ) -> str:
-        """System message: intake behavior + counselor persona from prescreening."""
+        """System message: intake behavior + counselor persona from prescreening.
+        NEW: Uses 4 distinct communication styles with dynamic switching.
+        """
         name = (therapist_name or "").strip() or "Опора"
         gender = therapist_gender if therapist_gender in ("female", "male") else "female"
-        traits = therapist_traits or []
-        traits_note = (
-            f" Your style traits chosen by the patient (tone hints): {', '.join(traits)}."
-            if traits
-            else ""
-        )
+        styles = therapist_styles or []
+
+        # NEW: Build styles section with detailed behavioral guidelines
+        styles_section = ""
+        if styles:
+            style_details = []
+            for style in styles:
+                if style in IntakePrompts.STYLE_GUIDELINES:
+                    sg = IntakePrompts.STYLE_GUIDELINES[style]
+                    markers = "\n    - ".join([""] + sg["language_markers"])
+                    style_details.append(
+                        f"\n- {sg['description']}\n"
+                        f"  Language markers:{markers}\n"
+                        f"  Use for: {sg['intake_focus']}"
+                    )
+
+            styles_section = "\n\nCOMMUNICATION STYLES (CRITICAL - MUST FOLLOW):" + "".join(style_details)
+
+            # Add dynamic switching instructions for multiple styles
+            if len(styles) > 1:
+                styles_section += f"""\n\nDYNAMIC STYLE SWITCHING (MANDATORY):
+You have {len(styles)} styles selected. Choose the ACTIVE style for EACH response based on:
+1. Current intake topic (mental health history vs current problems vs physical health)
+2. Patient's emotional state in their message
+3. Stage of intake (early rapport building vs specific fact gathering)\n
+Style priority rules for intake:
+- If discussing traumatic/sensitive experiences or patient shows distress → ACTIVE: soft
+- If gathering specific medical history, symptoms, dates, facts → ACTIVE: business
+- If exploring goals, motivation for therapy, desired changes → ACTIVE: motivating
+- If establishing initial rapport, general check-in, neutral topics → ACTIVE: friendly
+- Default when unclear: Use the FIRST selected style ({styles[0]})
+
+CRITICAL: Each response MUST clearly embody ONE active style. Do NOT blend styles equally in one response."""
+            else:
+                styles_section += f"\n\nACTIVE STYLE: You are using '{styles[0]}' for ALL responses in this intake. Embody it consistently."
+
         return (
             "You help collect intake information before ongoing psychological counseling. "
             "You do not provide diagnosis or formal treatment plans. "
@@ -49,7 +126,8 @@ class IntakePrompts:
             "CRITICAL: Adapt your response length to the emotional weight of the patient's message - "
             "longer for deep emotional content, concise for factual answers. "
             f'CRITICAL PERSONA: In all patient-facing replies you ARE the counselor named \"{name}\" '
-            f"(use Russian grammar consistent with counselor gender: {gender}).{traits_note} "
+            f"(use Russian grammar consistent with counselor gender: {gender}). "
+            f"{styles_section}"
             "If the patient asks your name or how to address you, give exactly that name — "
             'by default \"Опора\" if unsure. '
             "Never say you are an AI, bot, chatbot, or \"ИИ-ассистент\" / \"искусственный интеллект\". "
@@ -72,15 +150,29 @@ class IntakePrompts:
         avoid_patterns: list[str] | None = None,  # NEW: patterns to avoid repeating
         therapist_name: str = "Опора",
         therapist_gender: str = "female",
-        therapist_traits: list[str] | None = None,
+        therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
     ) -> str:
         required_fields_json = json.dumps(required_fields, ensure_ascii=False)
         card_json = json.dumps(current_card, ensure_ascii=False)
         age_text = str(patient_age) if patient_age is not None else ""
         t_name = (therapist_name or "").strip() or "Опора"
         t_gender = therapist_gender if therapist_gender in ("female", "male") else "female"
-        traits = therapist_traits or []
-        traits_json = json.dumps(traits, ensure_ascii=False)
+        # NEW: Use styles instead of traits with active style selection for this turn
+        styles = therapist_styles or []
+        styles_json = json.dumps(styles, ensure_ascii=False)
+
+        # NEW: Determine active style for this intake turn based on message content and intake stage
+        active_style = styles[0] if styles else "friendly"
+        if len(styles) > 1:
+            # Simple heuristic for intake style selection
+            if any(word in patient_message.lower() for word in ["травма", "боль", "страх", "тревога", "слезы", "ужас"]):
+                active_style = "soft" if "soft" in styles else active_style
+            elif any(word in patient_message.lower() for word in ["когда", "сколько", "часто", "симптом", "диагноз"]):
+                active_style = "business" if "business" in styles else active_style
+            elif any(word in patient_message.lower() for word in ["хочу", "цель", "изменить", "справиться", "план"]):
+                active_style = "motivating" if "motivating" in styles else active_style
+            elif current_user_turns <= 2:
+                active_style = "friendly" if "friendly" in styles else active_style
 
         # Address mode instructions
         address_instruction = (
@@ -123,7 +215,8 @@ class IntakePrompts:
 Context from prescreening (already chosen by the patient — use in replies; if they ask your name, you are \"{t_name}\"):
 - Counselor display name: {t_name}
 - Counselor gender (for Russian agreement in your lines): {t_gender}
-- Counselor style traits: {traits_json}
+- Counselor communication styles: {styles_json}
+- ACTIVE STYLE FOR THIS RESPONSE: {active_style} (MUST embody this style's language markers)
 
 Return JSON ONLY with this exact schema:
 {{

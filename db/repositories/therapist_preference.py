@@ -29,10 +29,10 @@ class TherapistPreferenceRepository:
         account_id: int,
         therapist_name: str | None = None,
         therapist_gender: str | None = None,
-        therapist_traits: list[str] | None = None,
+        therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
         mark_complete: bool = False,
     ) -> TherapistPreference | None:
-        """Update therapist preference fields."""
+        """Update therapist preference fields (NEW: using styles instead of traits)."""
         pref = await self.get_by_account_id(account_id)
         if not pref:
             return None
@@ -41,8 +41,9 @@ class TherapistPreferenceRepository:
             pref.therapist_name = therapist_name
         if therapist_gender is not None:
             pref.therapist_gender = therapist_gender
-        if therapist_traits is not None:
-            pref.therapist_traits = therapist_traits
+        # NEW: Store styles in therapist_traits field for backward DB compatibility
+        if therapist_styles is not None:
+            pref.therapist_traits = therapist_styles
         if mark_complete:
             pref.prescreening_completed_at = datetime.utcnow()
 

@@ -89,10 +89,12 @@ class DialogueService:
             profile = await profile_repo.get_by_account_id(account.id)
             pref = await pref_repo.get_by_account_id(account.id)
 
+            # NEW: Using styles instead of traits (mapped from therapist_traits field)
+            therapist_styles = (pref.therapist_traits if pref else None) or []
             user_profile = {
                 "therapist_name": (pref.therapist_name if pref else None) or "Опора",
                 "therapist_gender": (pref.therapist_gender if pref else None) or "female",
-                "therapist_traits": (pref.therapist_traits if pref else None) or [],
+                "therapist_styles": therapist_styles,  # NEW: styles instead of traits
                 "patient_display_name": (profile.effective_display_name if profile else None) or "",
                 "patient_age": profile.age if profile else None,
                 # NEW: Include sex and address_mode
@@ -150,7 +152,7 @@ class DialogueService:
             session_counter=new_session_number,
             therapist_name=user_profile["therapist_name"],
             therapist_gender=user_profile["therapist_gender"],
-            therapist_traits=user_profile["therapist_traits"],
+            therapist_styles=user_profile["therapist_styles"],  # NEW: styles instead of traits
             patient_display_name=user_profile["patient_display_name"],
             patient_age=user_profile["patient_age"],
             patient_sex=user_profile["patient_sex"],  # NEW
@@ -371,7 +373,7 @@ class DialogueService:
                     current_stage=active_session.current_stage or "",
                     therapist_name=(pref.therapist_name if pref else None) or "Опора",
                     therapist_gender=(pref.therapist_gender if pref else None) or "female",
-                    therapist_traits=(pref.therapist_traits if pref else None) or [],
+                    therapist_styles=(pref.therapist_traits if pref else None) or [],  # NEW: styles from traits field
                     patient_display_name=(profile.effective_display_name if profile else None) or "",
                     patient_age=profile.age if profile else None,
                     patient_sex=(profile.sex if profile else None) or "prefer_not_to_say",  # NEW
@@ -591,17 +593,15 @@ class DialogueService:
                 f"Пояснение:\n{card.get('intake_hypothesis_explanation') or 'не указано'}"
             )
 
-    def _get_trait_labels_russian(self, trait_ids: list[str]) -> list[str]:
-        """Convert trait IDs to Russian labels."""
-        trait_map = {
-            "strict": "Строгий",
+    def _get_style_labels_russian(self, style_ids: list[str]) -> list[str]:
+        """Convert style IDs to Russian labels (NEW: 4 communication styles)."""
+        style_map = {
+            "friendly": "Дружелюбный",
+            "soft": "Мягкий",
             "business": "Деловой",
-            "calm": "Спокойный",
-            "kind": "Добрый",
-            "restrained": "Сдержанный",
-            "empathetic": "Эмпатичный",
+            "motivating": "Мотивирующий",
         }
-        return [trait_map.get(tid, tid) for tid in trait_ids]
+        return [style_map.get(sid, sid) for sid in style_ids]
 
     async def get_user_anket(self, telegram_id: int) -> str:
         """Return user prescreening profile (anket) for display - with NEW fields (sex, address_mode)."""
@@ -620,12 +620,18 @@ class DialogueService:
 
             # Get therapist preferences
             pref = await pref_repo.get_by_account_id(account.id)
-            therapist_profile = pref.get_therapist_profile() if pref else {"name": "Опора", "gender": "female", "traits": []}
+            # NEW: Using styles instead of traits
+            therapist_styles = (pref.therapist_traits if pref else None) or []
+            therapist_profile = {
+                "name": (pref.therapist_name if pref else None) or "Опора",
+                "gender": (pref.therapist_gender if pref else None) or "female",
+                "styles": therapist_styles,
+            }
 
-            # Build anket display with Russian trait labels
-            traits = therapist_profile.get("traits", [])
-            traits_labels = self._get_trait_labels_russian(traits)
-            traits_str = ", ".join(traits_labels) if traits_labels else "не указаны"
+            # Build anket display with Russian style labels (NEW)
+            styles = therapist_profile.get("styles", [])
+            styles_labels = self._get_style_labels_russian(styles)
+            styles_str = ", ".join(styles_labels) if styles_labels else "не указан"
             gender = "Женский" if therapist_profile.get("gender") == "female" else "Мужской"
 
             # Get user profile (with NEW fields)
@@ -643,7 +649,7 @@ class DialogueService:
                 f"<b>Настройки психолога:</b>\n"
                 f"🧠 Имя: {therapist_profile.get('name', 'Опора')}\n"
                 f"⚧ Пол: {gender}\n"
-                f"✨ Черты: {traits_str}\n\n"
+                f"✨ Стиль: {styles_str}\n\n"  # NEW: styles instead of traits
                 f"<b>Ваши данные:</b>\n"
                 f"👤 Имя: {display_name}\n"
                 f"🎂 Возраст: {age}\n"

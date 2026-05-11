@@ -22,7 +22,8 @@ class SessionState:
     # User profile from prescreening
     therapist_name: str = "Опора"
     therapist_gender: str = "female"
-    therapist_traits: list[str] = field(default_factory=list)
+    # NEW: Communication styles instead of traits (4 distinct styles)
+    therapist_styles: list[str] = field(default_factory=list)
     patient_display_name: str = ""
     patient_age: int | None = None
     # NEW: Patient sex for personalized responses

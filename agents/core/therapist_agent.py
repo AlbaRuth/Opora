@@ -335,11 +335,11 @@ class TherapistAgent:
         current_strategy_text = strategy.get("strategy_text", "")
         
         # Build personalized system message and prompt
-        # NEW: Include address_mode in system message and prompt
+        # NEW: Include address_mode and styles in system message and prompt
         system_message = TherapistPrompts.get_system_message(
             therapist_name=state.therapist_name,
             therapist_gender=state.therapist_gender,
-            therapist_traits=state.therapist_traits,
+            therapist_styles=state.therapist_styles,  # NEW: styles instead of traits
             address_mode=state.address_mode,  # NEW
         )
 
@@ -357,7 +357,7 @@ class TherapistAgent:
             patient_display_name=state.patient_display_name,
             patient_age=state.patient_age,
             patient_sex=state.patient_sex,  # NEW
-            therapist_traits=state.therapist_traits,
+            therapist_styles=state.therapist_styles,  # NEW: styles instead of traits
             address_mode=state.address_mode,  # NEW
         )
 

@@ -104,7 +104,7 @@ class IntakeAgent:
                 recent_dialogue=recent_dialogue,
                 therapist_name=state.therapist_name,
                 therapist_gender=state.therapist_gender,
-                therapist_traits=state.therapist_traits,
+                therapist_styles=state.therapist_styles,  # NEW: styles instead of traits
             )
 
             result = await self.llm_client.chat_completion(
@@ -115,7 +115,7 @@ class IntakeAgent:
                         "content": IntakePrompts.get_system_message(
                             therapist_name=state.therapist_name,
                             therapist_gender=state.therapist_gender,
-                            therapist_traits=state.therapist_traits,
+                            therapist_styles=state.therapist_styles  # NEW: styles instead of traits,
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -227,7 +227,7 @@ class IntakeAgent:
                         "content": IntakePrompts.get_system_message(
                             therapist_name=state.therapist_name,
                             therapist_gender=state.therapist_gender,
-                            therapist_traits=state.therapist_traits,
+                            therapist_styles=state.therapist_styles  # NEW: styles instead of traits,
                         ),
                     },
                     {"role": "user", "content": prompt},

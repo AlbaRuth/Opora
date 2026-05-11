@@ -36,14 +36,12 @@ logger = get_logger(LogContexts.TELEGRAM)
 # Latency budget threshold in seconds for non-LLM operations
 LATENCY_BUDGET_MS = 500
 
-# Available therapist traits
-THERAPIST_TRAITS = [
-    ("strict", "Строгий"),
+# Available communication styles (NEW: 4 distinct styles)
+THERAPIST_STYLES = [
+    ("friendly", "Дружелюбный"),
+    ("soft", "Мягкий"),
     ("business", "Деловой"),
-    ("calm", "Спокойный"),
-    ("kind", "Добрый"),
-    ("restrained", "Сдержанный"),
-    ("empathetic", "Эмпатичный"),
+    ("motivating", "Мотивирующий"),
 ]
 
 DEFAULT_THERAPIST_NAME = "Опора"
@@ -63,7 +61,8 @@ class PrescreeningState:
     patient_sex: str = "prefer_not_to_say"
     # NEW: Address mode (formal=вы, informal=ты)
     address_mode: str = "formal"
-    selected_traits: list[str] = field(default_factory=list)
+    # NEW: Communication styles (4 distinct styles, can select multiple)
+    selected_styles: list[str] = field(default_factory=list)
 
 
 # In-memory storage for prescreening states (user_id -> state)
@@ -131,24 +130,24 @@ def build_address_mode_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def build_traits_keyboard(selected_traits: list[str]) -> InlineKeyboardMarkup:
-    """Build keyboard for traits multi-selection."""
+def build_styles_keyboard(selected_styles: list[str]) -> InlineKeyboardMarkup:
+    """Build keyboard for styles multi-selection (NEW: 4 communication styles)."""
     builder = InlineKeyboardBuilder()
 
-    for trait_id, trait_label in THERAPIST_TRAITS:
-        is_selected = trait_id in selected_traits
+    for style_id, style_label in THERAPIST_STYLES:
+        is_selected = style_id in selected_styles
         prefix = "✅ " if is_selected else "⬜ "
         builder.row(
             InlineKeyboardButton(
-                text=f"{prefix}{trait_label}",
-                callback_data=f"prescreen:trait:{trait_id}"
+                text=f"{prefix}{style_label}",
+                callback_data=f"prescreen:style:{style_id}"
             )
         )
 
-    # Add Done button if at least one trait selected
-    if selected_traits:
+    # Add Done button if at least one style selected
+    if selected_styles:
         builder.row(
-            InlineKeyboardButton(text="✓ Готово", callback_data="prescreen:traits_done")
+            InlineKeyboardButton(text="✓ Готово", callback_data="prescreen:styles_done")
         )
 
     return builder.as_markup()
@@ -292,19 +291,40 @@ async def _ask_address_mode(message: types.Message, state: PrescreeningState) ->
     )
 
 
-async def _ask_traits(message: types.Message, state: PrescreeningState) -> None:
-    """Ask for therapist traits selection."""
+async def _ask_styles(message: types.Message, state: PrescreeningState) -> None:
+    """Ask for communication style selection (NEW: 4 distinct styles)."""
     await message.answer(
-        "<b>Выберите черты характера психолога:</b>\n"
-        "(можно выбрать несколько, минимум 1)",
-        reply_markup=build_traits_keyboard(state.selected_traits),
+        "<b>Выберите стиль общения психолога:</b>\n"
+        "(можно выбрать несколько для динамического переключения)",
+        reply_markup=build_styles_keyboard(state.selected_styles),
     )
 
 
-def _get_trait_labels(trait_ids: list[str]) -> list[str]:
-    """Convert trait IDs to Russian labels."""
-    trait_map = dict(THERAPIST_TRAITS)
-    return [trait_map.get(tid, tid) for tid in trait_ids]
+def _get_style_labels(style_ids: list[str]) -> list[str]:
+    """Convert style IDs to Russian labels (NEW: 4 communication styles)."""
+    style_map = dict(THERAPIST_STYLES)
+    return [style_map.get(sid, sid) for sid in style_ids]
+
+
+def _migrate_traits_to_styles(traits: list[str] | None) -> list[str]:
+    """Migrate old trait IDs to new style IDs (best effort mapping)."""
+    if not traits:
+        return []
+    # Mapping from old traits to new styles
+    trait_to_style = {
+        "strict": "business",
+        "business": "business",
+        "calm": "soft",
+        "kind": "friendly",
+        "restrained": "soft",
+        "empathetic": "friendly",
+    }
+    migrated = []
+    for trait in traits:
+        style = trait_to_style.get(trait)
+        if style and style not in migrated:
+            migrated.append(style)
+    return migrated if migrated else ["friendly"]  # Default fallback
 
 
 def _get_sex_label(sex: str) -> str:
@@ -343,7 +363,8 @@ async def _complete_prescreening(
         therapist_gender=state.therapist_gender,
         patient_sex=state.patient_sex,
         address_mode=state.address_mode,
-        traits_count=len(state.selected_traits),
+        styles_count=len(state.selected_styles),
+        selected_styles=state.selected_styles,
     )
 
     # Save to database using new repositories
@@ -352,13 +373,13 @@ async def _complete_prescreening(
         account = await account_repo.get_by_telegram_id(actual_user_id)
 
         if account:
-            # Update therapist preferences
+            # Update therapist preferences (NEW: using styles instead of traits)
             therapist_repo = TherapistPreferenceRepository(session)
             await therapist_repo.update_preferences(
                 account_id=account.id,
                 therapist_name=state.therapist_name,
                 therapist_gender=state.therapist_gender,
-                therapist_traits=state.selected_traits,
+                therapist_styles=state.selected_styles,  # NEW: styles instead of traits
                 mark_complete=True,
             )
 
@@ -399,9 +420,9 @@ async def _complete_prescreening(
     gender_label = "Женский" if state.therapist_gender == "female" else "Мужской"
     sex_label = _get_sex_label(state.patient_sex)
     address_label = _get_address_mode_label(state.address_mode)
-    traits_labels = _get_trait_labels(state.selected_traits)
+    styles_labels = _get_style_labels(state.selected_styles)
 
-    # Build profile summary
+    # Build profile summary (NEW: styles instead of traits)
     profile_lines = [
         "✅ <b>Профиль обновлен!</b>",
         "",
@@ -412,7 +433,7 @@ async def _complete_prescreening(
         f"🎂 Возраст: {state.patient_age}",
         f"⚥ Ваш пол: {sex_label}",
         f"💬 Обращение: {address_label}",
-        f"✨ Характер: {', '.join(traits_labels)}",
+        f"✨ Стиль общения: {', '.join(styles_labels)}",  # NEW: styles label
     ]
 
     await message.answer("\n".join(profile_lines))
@@ -530,8 +551,12 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
             state.therapist_name = pref.therapist_name
         if pref.therapist_gender:
             state.therapist_gender = pref.therapist_gender
-        if pref.therapist_traits:
-            state.selected_traits = list(pref.therapist_traits)
+        # NEW: Load styles instead of traits
+        if getattr(pref, 'therapist_styles', None):
+            state.selected_styles = list(pref.therapist_styles)
+        elif getattr(pref, 'therapist_traits', None):
+            # Fallback: migrate old traits to new styles (best effort)
+            state.selected_styles = _migrate_traits_to_styles(pref.therapist_traits)
 
     # NEW: Pre-fill user profile data
     if account.user_profile:
@@ -672,66 +697,66 @@ async def on_address_mode_select(callback: types.CallbackQuery) -> None:
             f"<b>Стиль обращения:</b> {address_label}"
         )
 
-        # Continue to traits selection
-        state.step = "awaiting_traits_selection"
-        await _ask_traits(callback.message, state)
+        # Continue to styles selection (NEW)
+        state.step = "awaiting_styles_selection"
+        await _ask_styles(callback.message, state)
     except Exception as e:
         logger.warning("address_select_error", user_id=user_id, error=str(e))
 
     logger.debug("address_select_processed", user_id=user_id, mode=address_mode, duration_ms=int((time.time() - start_time) * 1000))
 
 
-@dispatcher.callback_query(F.data.startswith("prescreen:trait:"))
-async def on_trait_toggle(callback: types.CallbackQuery) -> None:
-    """Handle trait toggle in multi-selection."""
+@dispatcher.callback_query(F.data.startswith("prescreen:style:"))
+async def on_style_toggle(callback: types.CallbackQuery) -> None:
+    """Handle style toggle in multi-selection (NEW: 4 communication styles)."""
     start_time = time.time()
     user_id = callback.from_user.id
 
     state = get_prescreening_state(user_id)
-    if not state or state.step != "awaiting_traits_selection":
+    if not state or state.step != "awaiting_styles_selection":
         await callback.answer("Устаревшая кнопка")
-        logger.debug("trait_toggle_outdated", user_id=user_id, step=getattr(state, 'step', None))
+        logger.debug("style_toggle_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
 
-    trait_id = callback.data.split(":")[-1]
+    style_id = callback.data.split(":")[-1]
 
     # Toggle selection
-    if trait_id in state.selected_traits:
-        state.selected_traits.remove(trait_id)
+    if style_id in state.selected_styles:
+        state.selected_styles.remove(style_id)
         action = "removed"
     else:
-        state.selected_traits.append(trait_id)
+        state.selected_styles.append(style_id)
         action = "added"
 
     # Fast response and keyboard update
     try:
         await callback.answer()  # Empty answer is fast
         await callback.message.edit_reply_markup(
-            reply_markup=build_traits_keyboard(state.selected_traits)
+            reply_markup=build_styles_keyboard(state.selected_styles)
         )
     except Exception as e:
-        logger.warning("trait_toggle_error", user_id=user_id, trait=trait_id, error=str(e))
+        logger.warning("style_toggle_error", user_id=user_id, style=style_id, error=str(e))
 
     duration_ms = int((time.time() - start_time) * 1000)
-    if duration_ms > 200:  # Trait toggle should be very fast
-        logger.warning("trait_toggle_slow", user_id=user_id, trait=trait_id, action=action, duration_ms=duration_ms)
+    if duration_ms > 200:  # Style toggle should be very fast
+        logger.warning("style_toggle_slow", user_id=user_id, style=style_id, action=action, duration_ms=duration_ms)
     else:
-        logger.debug("trait_toggle_processed", user_id=user_id, trait=trait_id, action=action, duration_ms=duration_ms)
+        logger.debug("style_toggle_processed", user_id=user_id, style=style_id, action=action, duration_ms=duration_ms)
 
 
-@dispatcher.callback_query(F.data == "prescreen:traits_done")
-async def on_traits_done(callback: types.CallbackQuery) -> None:
-    """Handle completion of traits selection with performance tracking."""
+@dispatcher.callback_query(F.data == "prescreen:styles_done")
+async def on_styles_done(callback: types.CallbackQuery) -> None:
+    """Handle completion of styles selection with performance tracking (NEW)."""
     start_time = time.time()
     user_id = callback.from_user.id
     state = get_prescreening_state(user_id)
 
-    if not state or state.step != "awaiting_traits_selection":
+    if not state or state.step != "awaiting_styles_selection":
         await callback.answer("Устаревшая кнопка")
         return
 
-    if not state.selected_traits:
-        await callback.answer("Выберите хотя бы одну черту")
+    if not state.selected_styles:
+        await callback.answer("Выберите хотя бы один стиль")
         return
 
     # Mark as processing to prevent double-clicks and concurrent processing

@@ -57,11 +57,11 @@ class TherapistPreference(Base, TimestampMixin):
         return self.prescreening_completed_at is not None
 
     def get_therapist_profile(self) -> dict:
-        """Get therapist persona configuration for prompts."""
+        """Get therapist persona configuration for prompts (NEW: returns styles)."""
         return {
             "name": self.therapist_name,
             "gender": self.therapist_gender,
-            "traits": self.therapist_traits or [],
+            "styles": self.therapist_traits or [],  # NEW: traits field stores styles
         }
 
     def __repr__(self) -> str:

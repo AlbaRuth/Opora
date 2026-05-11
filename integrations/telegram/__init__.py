@@ -9,7 +9,7 @@ from .prescreening import (
     start_prescreening,
     start_prescreening_for_edit,
     PrescreeningState,
-    THERAPIST_TRAITS,
+    THERAPIST_STYLES,  # NEW: renamed from THERAPIST_TRAITS
     DEFAULT_THERAPIST_NAME,
     DEFAULT_THERAPIST_GENDER,
 )
@@ -26,7 +26,7 @@ __all__ = [
     "start_prescreening",
     "start_prescreening_for_edit",
     "PrescreeningState",
-    "THERAPIST_TRAITS",
+    "THERAPIST_STYLES",  # NEW: renamed from THERAPIST_TRAITS
     "DEFAULT_THERAPIST_NAME",
     "DEFAULT_THERAPIST_GENDER",
 ]
