@@ -89,6 +89,8 @@ class TestDialogueServiceIntake:
 
         assert result["session_ended"] is False
         assert "достаточно" in result["response"].lower()
+        assert "/summary" in result["response"]
+        assert "основную информацию" in result["response"].lower()
         service.intake_agent.process_patient_input.assert_awaited_once()
         service.therapist_agent.process_patient_input.assert_not_called()
 
@@ -180,6 +182,9 @@ class TestDialogueServiceIntake:
         )
 
         assert result["session_ended"] is False
+        assert "/summary" in result["response"]
+        assert "первый этап" in result["response"].lower()
+        assert "основную информацию мы собрали" not in result["response"].lower()
         service.intake_agent.process_patient_input.assert_awaited_once()
         service.therapist_agent.process_patient_input.assert_not_called()
 

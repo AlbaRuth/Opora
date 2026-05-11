@@ -72,7 +72,7 @@ class TherapistEvaluator:
                 from db.repositories import AgentLogRepository
                 repo = AgentLogRepository(db_session)
                 await repo.log_llm_call(
-                    user_id=user_id,
+                    account_id=user_id,
                     agent_type="evaluator",
                     task_name=task_name,
                     model=self.settings.llm_evaluator_model,

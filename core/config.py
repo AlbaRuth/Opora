@@ -4,16 +4,21 @@ Based on Pydantic Settings pattern from SupportAssistant.
 """
 
 from functools import lru_cache
-from typing import Optional
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Загружать .env из корня репозитория, а не из cwd процесса (иначе при запуске
+# из другой папки подставятся значения по умолчанию, например intake_min_user_turns=6).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
-    
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -174,6 +179,11 @@ class Settings(BaseSettings):
             for field in self.intake_required_fields.split(",")
             if field.strip()
         ]
+
+    @property
+    def intake_max_user_turns(self) -> int:
+        """Hard cap on patient-side turns during intake: min × multiplier (.env)."""
+        return self.intake_min_user_turns * self.intake_max_user_turns_multiplier
 
 
 @lru_cache()

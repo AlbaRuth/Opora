@@ -13,6 +13,8 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from core.config import get_settings
+from core.intake_user_copy import build_intake_start_message
 from core.logging import get_logger, LogContexts
 from db.session import get_db_session
 from db.repositories import (
@@ -427,9 +429,14 @@ async def _complete_prescreening(
         await message.answer(welcome_msg)
         logger.info("auto_sent_welcome_back", user_id=actual_user_id, card_filled=True)
     else:
-        # Card empty - intake script message
-        intake_msg = _build_intake_start_message(
-            patient_name, state.address_mode, state.therapist_gender
+        # Card empty - intake script message (rounds from INTAKE_* .env)
+        settings = get_settings()
+        intake_msg = build_intake_start_message(
+            patient_name,
+            state.address_mode,
+            state.therapist_gender,
+            settings.intake_min_user_turns,
+            settings.intake_max_user_turns,
         )
         await message.answer(intake_msg)
         logger.info("auto_sent_intake_script", user_id=actual_user_id, card_filled=False)
@@ -471,37 +478,6 @@ async def _complete_prescreening(
 
     if total_duration_ms > LATENCY_BUDGET_MS:
         logger.warning("prescreening_total_slow", user_id=actual_user_id, duration_ms=total_duration_ms, budget_ms=LATENCY_BUDGET_MS)
-
-
-def _build_intake_start_message(
-    patient_name: str,
-    address_mode: str = "formal",
-    therapist_gender: str = "female",
-) -> str:
-    """Build scripted message for intake phase when card is NOT filled."""
-    name_part = f"{patient_name}, " if patient_name else ""
-    tg = therapist_gender if therapist_gender in ("female", "male") else "female"
-    is_female = tg == "female"
-    mog = "могла" if is_female else "мог"
-    polezn = "полезной" if is_female else "полезным"
-
-    # Adjust greeting based on address mode
-    if address_mode == "informal":
-        # Informal (ты)
-        return (
-            f"{name_part}чтобы я {mog} лучше понимать тебя и эффективнее помогать, "
-            "мне нужно собрать некоторую информацию о твоем состоянии. "
-            f"Это поможет мне быть более {polezn} в наших беседах.\n\n"
-            "Расскажи, пожалуйста, что сейчас беспокоит тебя больше всего?"
-        )
-    else:
-        # Formal (вы) - default
-        return (
-            f"{name_part}чтобы я {mog} лучше понимать вас и эффективнее помогать, "
-            "мне нужно собрать некоторую информацию о вашем состоянии. "
-            f"Это поможет мне быть более {polezn} в наших беседах.\n\n"
-            "Расскажите, пожалуйста, что сейчас беспокоит вас больше всего?"
-        )
 
 
 def _build_welcome_back_message(

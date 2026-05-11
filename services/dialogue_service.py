@@ -8,6 +8,10 @@ from typing import Any
 
 from agents.core import IntakeAgent, SessionState, TherapistAgent
 from core.config import get_settings
+from core.intake_user_copy import (
+    build_intake_completion_notice,
+    build_intake_start_message,
+)
 from core.logging import get_logger, LogContexts
 from db.repositories import (
     AccountRepository,
@@ -53,6 +57,7 @@ class DialogueService:
         new_session_number = 1
         user_profile: dict | None = None
         flow_phase = "therapy"
+        card_filled = False
 
         async with get_db_session() as session:
             account_repo = AccountRepository(session)
@@ -111,7 +116,12 @@ class DialogueService:
             if latest_session:
                 new_session_number = latest_session.session_number + 1
 
-            flow_phase = "intake" if self.settings.intake_enabled else "therapy"
+            clinical_repo = ClinicalProfileRepository(session)
+            card_filled = await clinical_repo.is_card_filled(account.id)
+            if self.settings.intake_enabled and not card_filled:
+                flow_phase = "intake"
+            else:
+                flow_phase = "therapy"
 
             # Create DB session first to reserve stable session_id for stateless flow
             new_session = await session_repo.create_session(
@@ -149,42 +159,35 @@ class DialogueService:
             intake_user_turns=0,
         )
 
-        # Determine which greeting branch to use based on card fill status
-        card_filled = False
-        async with get_db_session() as session:
-            clinical_repo = ClinicalProfileRepository(session)
-            card_filled = await clinical_repo.is_card_filled(account_id)
-
         if flow_phase == "intake":
-            # Intake phase - check if card already has data
-            if card_filled:
-                # Card is filled - use welcome back message (even in intake phase)
-                logger.info(
-                    "start_branch_card_complete",
-                    account_id=account_id,
-                    session_id=session_id,
-                    session_number=new_session_number,
-                    flow_phase=flow_phase,
-                )
-                return self._build_welcome_back_message(
-                    user_profile["patient_display_name"],
-                    user_profile["address_mode"],  # NEW
-                    user_profile["therapist_gender"],
-                )
-            else:
-                # Card not filled - scripted intake message (no LLM)
-                logger.info(
-                    "start_branch_card_incomplete",
-                    account_id=account_id,
-                    session_id=session_id,
-                    session_number=new_session_number,
-                    flow_phase=flow_phase,
-                )
-                return self._build_intake_start_message(
-                    user_profile["patient_display_name"],
-                    user_profile["address_mode"],  # NEW
-                    user_profile["therapist_gender"],
-                )
+            logger.info(
+                "start_branch_card_incomplete",
+                account_id=account_id,
+                session_id=session_id,
+                session_number=new_session_number,
+                flow_phase=flow_phase,
+            )
+            return build_intake_start_message(
+                user_profile["patient_display_name"],
+                user_profile["address_mode"],
+                user_profile["therapist_gender"],
+                self.settings.intake_min_user_turns,
+                self.settings.intake_max_user_turns,
+            )
+
+        if card_filled and self.settings.intake_enabled:
+            logger.info(
+                "start_branch_card_complete",
+                account_id=account_id,
+                session_id=session_id,
+                session_number=new_session_number,
+                flow_phase=flow_phase,
+            )
+            return self._build_welcome_back_message(
+                user_profile["patient_display_name"],
+                user_profile["address_mode"],
+                user_profile["therapist_gender"],
+            )
 
         # Run async agent initialization with explicit state DTO
         agent_result = await self.therapist_agent.start_new_session(state)
@@ -207,36 +210,6 @@ class DialogueService:
             )
 
             return agent_result["therapist_response"]
-
-    def _build_intake_start_message(
-        self,
-        patient_name: str,
-        address_mode: str = "formal",  # NEW
-        therapist_gender: str = "female",
-    ) -> str:
-        """Build scripted message for intake phase when card is NOT filled."""
-        name_part = f"{patient_name}, " if patient_name else ""
-        tg = therapist_gender if therapist_gender in ("female", "male") else "female"
-        is_female = tg == "female"
-        mog = "могла" if is_female else "мог"
-        polezn = "полезной" if is_female else "полезным"
-
-        if address_mode == "informal":
-            # Informal (ты)
-            return (
-                f"{name_part}чтобы я {mog} лучше понимать тебя и эффективнее помогать, "
-                "мне нужно собрать некоторую информацию о твоем состоянии. "
-                f"Это поможет мне быть более {polezn} в наших беседах.\n\n"
-                "Расскажи, пожалуйста, что сейчас беспокоит тебя больше всего?"
-            )
-        else:
-            # Formal (вы) - default
-            return (
-                f"{name_part}чтобы я {mog} лучше понимать вас и эффективнее помогать, "
-                "мне нужно собрать некоторую информацию о вашем состоянии. "
-                f"Это поможет мне быть более {polezn} в наших беседах.\n\n"
-                "Расскажите, пожалуйста, что сейчас беспокоит вас больше всего?"
-            )
 
     def _build_welcome_back_message(
         self,
@@ -303,7 +276,12 @@ class DialogueService:
             latest_session = await session_repo.get_latest_session(account.id)
             new_session_number = (latest_session.session_number + 1) if latest_session else 1
 
-            flow_phase = "intake" if self.settings.intake_enabled else "therapy"
+            clinical_repo = ClinicalProfileRepository(session)
+            card_filled = await clinical_repo.is_card_filled(account.id)
+            if self.settings.intake_enabled and not card_filled:
+                flow_phase = "intake"
+            else:
+                flow_phase = "therapy"
 
             # Create new session
             new_session = await session_repo.create_session(
@@ -416,10 +394,17 @@ class DialogueService:
                         patient_text=text,
                         state=state,
                     )
+                    doctor_content = result["therapist_response"]
+                    if result.get("intake_completed"):
+                        notice = build_intake_completion_notice(
+                            state.address_mode,
+                            bool(result.get("initial_info_insufficient")),
+                        )
+                        doctor_content = f"{doctor_content}\n\n{notice}".strip()
                     await message_repo.create_message(
                         session_id=active_session.id,
                         role="doctor",
-                        content=result["therapist_response"],
+                        content=doctor_content,
                         message_number=msg_count + 2,
                     )
                     await session_repo.increment_dialog_count(active_session.id)
@@ -460,7 +445,7 @@ class DialogueService:
                         },
                     )
                     return {
-                        "response": result["therapist_response"],
+                        "response": doctor_content,
                         "session_ended": False,
                         "strategy": {},
                     }

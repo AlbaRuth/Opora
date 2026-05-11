@@ -31,8 +31,7 @@ class IntakeAgent:
 
     def _compute_max_user_turns(self) -> int | None:
         """Compute maximum user turns for intake based on settings."""
-        multiplier = getattr(self.settings, 'intake_max_user_turns_multiplier', 2)
-        return self.settings.intake_min_user_turns * multiplier
+        return self.settings.intake_max_user_turns
 
     def _get_context_window_size(self) -> int:
         """Get the size of the dialogue context window."""

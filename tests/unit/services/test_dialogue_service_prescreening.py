@@ -184,11 +184,15 @@ class TestDialogueServicePrescreening:
 
         service = DialogueService()
         monkeypatch.setattr(service.settings, "intake_enabled", True)
+        monkeypatch.setattr(service.settings, "intake_min_user_turns", 4)
+        monkeypatch.setattr(service.settings, "intake_max_user_turns_multiplier", 3)
         service.therapist_agent = MagicMock()
 
         result = await service.start_session(telegram_id=912351)
         assert result is not None
         assert "информацию" in result.lower() or "собрать" in result.lower()
+        assert "от 4 до 12" in result
+        assert "клинической карточки" in result
 
     async def test_start_session_intake_branch_card_complete(
         self, db_session, patch_get_db_session, monkeypatch
@@ -216,6 +220,20 @@ class TestDialogueServicePrescreening:
         assert result is not None
         assert "Иван" in result or "друг" in result
         assert "день" in result.lower()
+
+        from sqlalchemy import select
+        from db.models import TherapySession
+        from db.repositories import IntakeStateRepository
+
+        res = await db_session.execute(
+            select(TherapySession)
+            .where(TherapySession.account_id == account.id)
+            .order_by(TherapySession.id.desc())
+            .limit(1)
+        )
+        ts = res.scalar_one()
+        st = await IntakeStateRepository(db_session).get_by_session_id(ts.id)
+        assert st is not None and st.flow_phase == "therapy"
 
     async def test_get_user_anket_returns_profile(self, db_session, patch_get_db_session):
         from services.dialogue_service import DialogueService
