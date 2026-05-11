@@ -224,6 +224,6 @@ class TestTherapistPromptsPersonalization:
             session_memory={"dialogs": []},
         )
 
-        assert "CRITICAL RULE - LANGUAGE MATCHING" in prompt
-        assert "SAME LANGUAGE" in prompt
+        assert "EXACT SAME LANGUAGE" in prompt
+        assert "##CRITICAL RULES" in prompt
         assert "patient's input" in prompt.lower() or "patient's message" in prompt.lower()

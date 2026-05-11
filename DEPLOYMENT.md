@@ -69,10 +69,13 @@ python scripts/check_migrations.py
 # 2. Применить миграции
 python scripts/migrate.py upgrade
 
-# 3. Запустить тесты
-pytest
+# 3. Создать тестовую БД PostgreSQL (один раз), например: CREATE DATABASE opora_test;
+#    Либо задать DATABASE_URL на эту БД; иначе pytest пропустит тесты, требующие БД.
 
-# 4. Запустить бота
+# 4. Запустить тесты (рекомендуется из .venv; Alembic upgrade вызывается при старте pytest)
+.\.venv\Scripts\python.exe -m pytest
+
+# 5. Запустить бота
 python bot_runner.py
 ```
 

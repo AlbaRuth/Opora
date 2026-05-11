@@ -1,23 +1,29 @@
 """Integration tests for concurrent session handling with DB lock."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Import SessionState directly from file to avoid circular import
+from db.models import Account, TherapySession
+from db.repositories import AccountRepository, SessionRepository
+from tests.factories import create_active_therapy_session
+
 _project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root / "agents" / "core"))
-from session_state import SessionState
+from session_state import SessionState  # noqa: E402
+
 sys.path.pop(0)
 
 
 @pytest.mark.skipif(
-    True,  # Set to False when DB is available
-    reason="Requires running PostgreSQL instance - enable manually for integration testing"
+    not os.environ.get("OPORA_RUN_INTEGRATION"),
+    reason="Set OPORA_RUN_INTEGRATION=1 to run (uses real PostgreSQL + non-rolled-back semantics).",
 )
 class TestConcurrentSessionHandling:
     """
@@ -30,92 +36,62 @@ class TestConcurrentSessionHandling:
     """
 
     @pytest_asyncio.fixture
-    async def test_user(self, db_session: AsyncSession) -> User:
-        """Create a test user."""
-        user_repo = UserRepository(db_session)
-        user = await user_repo.create_from_telegram(
+    async def test_user(self, db_session: AsyncSession) -> Account:
+        repo = AccountRepository(db_session)
+        return await repo.create_from_telegram(
             telegram_id=999999,
             username="test_user",
         )
-        return user
 
     @pytest_asyncio.fixture
-    async def test_session(self, db_session: AsyncSession, test_user: User) -> TherapySession:
-        """Create a test therapy session."""
-        session_repo = SessionRepository(db_session)
-        session = await session_repo.create_session(
-            user_id=test_user.id,
-            session_number=1,
-            therapy_type="test therapy",
+    async def test_session(
+        self, db_session: AsyncSession, test_user: Account
+    ) -> TherapySession:
+        ts, _ = await create_active_therapy_session(
+            db_session, test_user.id, flow_phase="therapy"
         )
-        return session
+        return ts
 
     async def test_concurrent_dialog_count_increment(
         self,
         db_session: AsyncSession,
         test_session: TherapySession,
     ):
-        """
-        Test that concurrent dialog count increments are properly serialized.
-        
-        This simulates two messages arriving at the same time for the same session
-        and verifies the counter increments correctly without race conditions.
-        """
         session_repo = SessionRepository(db_session)
         session_id = test_session.id
 
         async def increment_dialog() -> int:
-            """Simulate one dialog count increment with lock."""
-            # In real scenario, this happens in a separate transaction
-            # Here we test the lock mechanism
             await session_repo.acquire_session_lock(session_id)
-            
-            session = await session_repo.get_by_id(session_id)
-            new_count = session.dialog_count + 1
             await session_repo.increment_dialog_count(session_id)
-            return new_count
+            sess = await session_repo.get_by_id(session_id)
+            return sess.dialog_count if sess else -1
 
-        # Run 5 concurrent increments
         tasks = [increment_dialog() for _ in range(5)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # All should succeed (no exceptions)
         errors = [r for r in results if isinstance(r, Exception)]
         assert len(errors) == 0, f"Concurrent increments raised errors: {errors}"
 
-        # Final count should be exactly 5
         final_session = await session_repo.get_by_id(session_id)
-        assert final_session.dialog_count == 5, (
-            f"Expected 5 increments, got {final_session.dialog_count}. "
-            "This indicates a race condition in dialog counting."
-        )
+        assert final_session.dialog_count == 5
 
     async def test_session_state_consistency_under_load(
         self,
         db_session: AsyncSession,
-        test_user: User,
+        test_user: Account,
     ):
-        """
-        Test that SessionState correctly reflects DB state under concurrent access.
-        
-        Verifies the DB -> DTO -> Orchestrator -> DB round-trip maintains consistency.
-        """
         session_repo = SessionRepository(db_session)
-        
-        # Create initial session
-        session = await session_repo.create_session(
-            user_id=test_user.id,
-            session_number=2,
-            therapy_type="initial therapy",
-            current_stage="assessment",
+
+        ts, _ = await create_active_therapy_session(
+            db_session, test_user.id, flow_phase="therapy", session_number=2
         )
+        ts.therapy_type = "initial therapy"
+        ts.current_stage = "assessment"
+        await db_session.flush()
+        session = ts
 
         async def simulate_message_processing(message_num: int) -> Tuple[int, str]:
-            """Simulate one turn of message processing."""
-            # Acquire lock
             await session_repo.acquire_session_lock(session.id)
-            
-            # Load current state from DB (simulating DialogueService)
             db_session_obj = await session_repo.get_by_id(session.id)
             state = SessionState(
                 patient_id=str(test_user.id),
@@ -126,37 +102,26 @@ class TestConcurrentSessionHandling:
                 current_therapy=db_session_obj.therapy_type,
                 current_stage=db_session_obj.current_stage or "",
             )
-            
-            # Simulate agent processing - mutate state
             state.dialog_count += 1
             state.current_stage = f"stage_{message_num}"
-            
-            # Save back to DB
             await session_repo.increment_dialog_count(session.id)
             await session_repo.update_current_stage(session.id, state.current_stage)
-            
             return state.dialog_count, state.current_stage
 
-        # Run concurrent processing
         message_count = 10
         tasks = [simulate_message_processing(i) for i in range(message_count)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Check results
         successful_results: List[Tuple[int, str]] = [
             r for r in results if not isinstance(r, Exception)
         ]
         errors = [r for r in results if isinstance(r, Exception)]
 
-        # All operations should succeed
         assert len(errors) == 0, f"Some concurrent operations failed: {errors}"
         assert len(successful_results) == message_count
 
-        # Final DB state should be consistent
         final_session = await session_repo.get_by_id(session.id)
-        assert final_session.dialog_count == message_count, (
-            f"Dialog count mismatch: expected {message_count}, got {final_session.dialog_count}"
-        )
+        assert final_session.dialog_count == message_count
 
 
 class TestSessionStateMapping:

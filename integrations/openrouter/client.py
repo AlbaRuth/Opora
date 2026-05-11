@@ -48,31 +48,43 @@ class OpenRouterClient:
         temperature: float = 0.7,
         max_tokens: int = 150,
         task_name: str = "unknown",
+        top_p: float | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
     ) -> dict[str, Any]:
         """
         Execute chat completion with retries.
-        
+
         Returns dict with:
         - content: str
         - usage: dict with prompt_tokens, completion_tokens, total_tokens
         - latency_ms: int
         - success: bool
         - error: str | None
-        """ 
+        """
         model = self._normalize_model_id(model)
         max_retries = self.settings.llm_max_retries
-        
+
+        # Build kwargs dynamically to only send supported parameters
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if top_p is not None:
+            kwargs["top_p"] = top_p
+        if frequency_penalty is not None:
+            kwargs["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            kwargs["presence_penalty"] = presence_penalty
+
         start_time = time.time()
         last_error = None
-        
+
         for attempt in range(max_retries + 1):
             try:
-                completion: ChatCompletion = await self.client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                completion: ChatCompletion = await self.client.chat.completions.create(**kwargs)
                 
                 latency_ms = int((time.time() - start_time) * 1000)
                 

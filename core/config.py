@@ -105,17 +105,40 @@ class Settings(BaseSettings):
         default=4,
         alias="INTAKE_BACKGROUND_UPDATE_EVERY_USER_TURNS",
     )
+    # NEW: Context window and max turns multipliers
+    intake_context_window_multiplier: int = Field(
+        default=2,
+        alias="INTAKE_CONTEXT_WINDOW_MULTIPLIER",
+    )
+    intake_max_user_turns_multiplier: int = Field(
+        default=2,
+        alias="INTAKE_MAX_USER_TURNS_MULTIPLIER",
+    )
     llm_intake_model: str = Field(
         default="Pro/deepseek-ai/DeepSeek-V3",
         alias="LLM_INTAKE_MODEL",
     )
+    # UPDATED: Higher default temperature for more natural, varied responses
     llm_intake_temperature: float = Field(
-        default=0.2,
+        default=0.45,
         alias="LLM_INTAKE_TEMPERATURE",
     )
     llm_intake_max_tokens: int = Field(
-        default=350,
+        default=550,
         alias="LLM_INTAKE_MAX_TOKENS",
+    )
+    # NEW: Additional sampling parameters for intake
+    llm_intake_top_p: float = Field(
+        default=0.95,
+        alias="LLM_INTAKE_TOP_P",
+    )
+    llm_intake_frequency_penalty: float = Field(
+        default=0.3,
+        alias="LLM_INTAKE_FREQUENCY_PENALTY",
+    )
+    llm_intake_presence_penalty: float = Field(
+        default=0.15,
+        alias="LLM_INTAKE_PRESENCE_PENALTY",
     )
     
     # Langfuse

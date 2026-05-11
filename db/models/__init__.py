@@ -1,18 +1,50 @@
-"""Database models for Opora."""
+"""Database models for Opora.
+
+New schema organization:
+- identity: accounts (root entity)
+- profile: user_profiles, therapist_preferences (user preferences)
+- clinical: clinical_profiles (medical data)
+- therapy: therapy_sessions, intake_states, messages, decision_logs
+- observability: agent_logs
+"""
 
 from .base import Base, TimestampMixin
-from .user import User
-from .session import TherapySession
+
+# Identity schema
+from .account import Account
+
+# Profile schema
+from .user_profile import UserProfile
+from .therapist_preference import TherapistPreference
+
+# Clinical schema
+from .clinical_profile import ClinicalProfile
+
+# Therapy schema
+from .therapy_session import TherapySession
+from .intake_state import IntakeState
 from .message import Message
-from .decision import DecisionLog
+from .decision_log import DecisionLog
+
+# Observability schema
 from .agent_log import AgentLog
 
 __all__ = [
+    # Base
     "Base",
     "TimestampMixin",
-    "User",
+    # Identity
+    "Account",
+    # Profile
+    "UserProfile",
+    "TherapistPreference",
+    # Clinical
+    "ClinicalProfile",
+    # Therapy
     "TherapySession",
+    "IntakeState",
     "Message",
     "DecisionLog",
+    # Observability
     "AgentLog",
 ]

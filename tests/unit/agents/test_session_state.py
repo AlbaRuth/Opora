@@ -92,3 +92,31 @@ class TestSessionState:
         assert state.session_id == "100_3"
         assert state.session_db_id == 50
         assert state.session_counter == 3
+
+
+class TestSessionStateAddressMode:
+    def test_formal_pronouns(self):
+        state = SessionState(
+            patient_id="1",
+            session_id="1_1",
+            session_db_id=1,
+            dialog_count=0,
+            session_counter=1,
+            address_mode="formal",
+        )
+        assert state.get_address_pronoun_you() == "вы"
+        assert state.get_address_pronoun_your() == "ваш"
+        assert state.get_address_verb_suffix() == "ите"
+
+    def test_informal_pronouns(self):
+        state = SessionState(
+            patient_id="1",
+            session_id="1_1",
+            session_db_id=1,
+            dialog_count=0,
+            session_counter=1,
+            address_mode="informal",
+        )
+        assert state.get_address_pronoun_you() == "ты"
+        assert state.get_address_pronoun_your() == "твой"
+        assert state.get_address_verb_suffix() == "и"

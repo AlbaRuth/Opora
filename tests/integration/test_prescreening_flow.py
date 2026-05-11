@@ -218,7 +218,7 @@ class TestPrescreeningTextHandling:
 
         assert result is True
         assert state.patient_age == 25
-        assert state.step == "awaiting_traits_selection"
+        assert state.step == "awaiting_patient_sex"
 
     async def test_handle_patient_age_step_invalid(self):
         """Test handling invalid age input."""
@@ -273,20 +273,23 @@ class TestPrescreeningTextHandling:
         """Test handling when not in prescreening."""
         from aiogram.types import Message, User as TgUser
 
+        uid = 770770
+        clear_prescreening_state(uid)
+
         mock_user = MagicMock(spec=TgUser)
-        mock_user.id = 12345
+        mock_user.id = uid
 
         mock_message = MagicMock(spec=Message)
         mock_message.from_user = mock_user
         mock_message.text = "Hello"
+        mock_message.answer = AsyncMock()
 
-        # Don't set prescreening state
         result = await handle_prescreening_text(mock_message)
 
         assert result is False
+        mock_message.answer.assert_not_called()
 
 
-@pytest.mark.asyncio
 class TestPrescreeningConstants:
     """Test prescreening constants."""
 

@@ -33,14 +33,14 @@ class LangfuseClient:
     def __init__(self):
         if self._initialized:
             return
-        
+
         self.settings = get_settings()
-        
+
         if not self.settings.langfuse_enabled:
             self.client = None
             self._initialized = True
             return
-        
+
         try:
             self.client = Langfuse(
                 public_key=self.settings.langfuse_public_key,
@@ -48,11 +48,24 @@ class LangfuseClient:
                 host=self.settings.langfuse_host,
             )
             logger.info("langfuse_initialized", host=self.settings.langfuse_host)
+            # Smoke test: verify the client has required methods
+            self._validate_client()
         except Exception as e:
             logger.error("langfuse_init_failed", error=str(e))
             self.client = None
-        
+
         self._initialized = True
+
+    def _validate_client(self) -> None:
+        """Validate that Langfuse client has required methods."""
+        if self.client is None:
+            return
+        required_methods = ["trace", "flush"]
+        missing = [m for m in required_methods if not hasattr(self.client, m)]
+        if missing:
+            logger.warning("langfuse_client_missing_methods", missing=missing)
+            # Disable client if critical methods are missing
+            self.client = None
     
     def is_enabled(self) -> bool:
         """Check if Langfuse is enabled and initialized."""
@@ -68,7 +81,12 @@ class LangfuseClient:
         """Create a new trace."""
         if not self.is_enabled():
             return None
-        
+
+        # Defensive: check method exists before calling
+        if not hasattr(self.client, "trace"):
+            logger.warning("langfuse_trace_method_missing")
+            return None
+
         try:
             trace = self.client.trace(
                 name=name,
@@ -129,11 +147,23 @@ class LangfuseClient:
     
     def flush(self) -> None:
         """Flush pending events to Langfuse."""
-        if self.is_enabled():
-            try:
-                self.client.flush()
-            except Exception as e:
-                logger.warning("langfuse_flush_failed", error=str(e))
+        if not self.is_enabled():
+            return
+
+        # Defensive: check method exists before calling
+        if not hasattr(self.client, "flush"):
+            logger.warning("langfuse_flush_method_missing")
+            return
+
+        try:
+            self.client.flush()
+        except Exception as e:
+            logger.warning("langfuse_flush_failed", error=str(e))
+
+
+def init_langfuse_on_startup() -> None:
+    """Eagerly initialize LangfuseClient so misconfiguration surfaces at boot, not on first message."""
+    LangfuseClient()
 
 
 @asynccontextmanager

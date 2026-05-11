@@ -13,7 +13,8 @@ from agents.prompts.therapist_prompts import TherapistPrompts
 from agents.evaluators.therapist_evaluator import TherapistEvaluator
 from db.session import get_db_session
 from db.repositories import (
-    UserRepository,
+    AccountRepository,
+    ClinicalProfileRepository,
     SessionRepository,
     MessageRepository,
     DecisionLogRepository,
@@ -38,78 +39,84 @@ class TherapistAgent:
     async def start_new_session(self, state: SessionState) -> Dict[str, Any]:
         """
         Start new therapy session.
-        Original logic from main.py lines 64-102.
+        NEW: Uses normalized schema (AccountRepository, ClinicalProfileRepository).
         """
         patient_id = state.patient_id
-        user_id_int = int(patient_id)
+        account_id_int = int(patient_id)
 
-        # Get or create user with medical info
+        # Get or create account with medical info (new schema)
         async with get_db_session() as session:
-            user_repo = UserRepository(session)
-            user = await user_repo.get_by_id(user_id_int)
-            
-            if not user:
-                # Create user with default info
-                user = await user_repo.create_from_telegram(
-                    telegram_id=user_id_int,
+            account_repo = AccountRepository(session)
+            clinical_repo = ClinicalProfileRepository(session)
+
+            account = await account_repo.get_by_id(account_id_int)
+
+            if not account:
+                # Create account with default info
+                account = await account_repo.create_from_telegram(
+                    telegram_id=account_id_int,
                 )
-            
-            # Build patient record from user data (prefer prescreening fields)
-            patient_record = {
-                "patient pseudonym": user.patient_display_name or user.patient_pseudonym or "",
-                "patient age": str(user.patient_age) if user.patient_age is not None else user.patient_age_legacy or "",
-                "mental health history": user.mental_health_history or "",
-                "physical health history": user.physical_health_history or "",
-                "current problems and symptoms": user.current_problems or "",
-            }
-            
+
+            # Build patient record from clinical profile (new schema)
+            patient_record = await clinical_repo.get_patient_record(account_id_int)
+            if not patient_record:
+                patient_record = {
+                    "patient pseudonym": "",
+                    "patient age": "",
+                    "mental health history": "",
+                    "physical health history": "",
+                    "current problems and symptoms": "",
+                }
+
             # Get existing sessions from DB
             session_repo = SessionRepository(session)
-            existing_sessions = await session_repo.get_all_user_sessions(user.id)
+            existing_sessions = await session_repo.get_all_account_sessions(account.id)
             sessions_for_eval = [
                 s for s in existing_sessions if s.id != state.session_db_id
             ]
-            
+
             # Build sessions data for evaluator
             sessions_data = {}
             msg_repo = MessageRepository(session)
             for s in sessions_for_eval:
                 session_key = f"session_{s.session_number}"
-                
+
                 # Get messages for this session
                 messages = await msg_repo.get_session_messages(s.id)
                 dialogs = [f"{'PATIENT' if m.role == 'patient' else 'DOCTOR'}: {m.content}" for m in messages]
-                
+
                 sessions_data[session_key] = {
                     "therapy": s.therapy_type,
                     "dialogs": dialogs,
                 }
-        
+
         # Cross-session evaluation (async)
         evaluation_result = await self.evaluator.cross_session_evaluate(
-            user_id=user_id_int,
+            user_id=account_id_int,
             sessions_data=sessions_data,
             patient_record=patient_record,
             session_id=state.session_db_id,
         )
-        
+
         state.current_therapy = evaluation_result.get("new_therapy", "unspecified therapy")
         state.dialog_count = 0
         state.current_stage = ""
-        
+
         # Generate personalized greeting based on session number and profile
-        # Default to Russian since prescreening is in Russian
+        # NEW: Include address_mode for proper formal/informal greeting
         if state.session_counter == 1:
             greeting = TherapistPrompts.get_first_session_greeting(
                 therapist_name=state.therapist_name,
                 patient_display_name=state.patient_display_name,
                 language="ru",
+                address_mode=state.address_mode,  # NEW
             )
         else:
             greeting = TherapistPrompts.get_return_session_greeting(
                 therapist_name=state.therapist_name,
                 patient_display_name=state.patient_display_name,
                 language="ru",
+                address_mode=state.address_mode,  # NEW
             )
         
         # Save therapy reason (async)
@@ -188,7 +195,7 @@ class TherapistAgent:
             msg_repo = MessageRepository(session)
             
             # Build sessions data for memory check
-            all_sessions = await session_repo.get_all_user_sessions(user_id_int)
+            all_sessions = await session_repo.get_all_account_sessions(user_id_int)
             sessions_data = {}
             for s in all_sessions:
                 session_key = f"session_{s.session_number}"
@@ -328,10 +335,12 @@ class TherapistAgent:
         current_strategy_text = strategy.get("strategy_text", "")
         
         # Build personalized system message and prompt
+        # NEW: Include address_mode in system message and prompt
         system_message = TherapistPrompts.get_system_message(
             therapist_name=state.therapist_name,
             therapist_gender=state.therapist_gender,
             therapist_traits=state.therapist_traits,
+            address_mode=state.address_mode,  # NEW
         )
 
         prompt = TherapistPrompts.get_response_prompt(
@@ -347,7 +356,9 @@ class TherapistAgent:
             therapist_name=state.therapist_name,
             patient_display_name=state.patient_display_name,
             patient_age=state.patient_age,
+            patient_sex=state.patient_sex,  # NEW
             therapist_traits=state.therapist_traits,
+            address_mode=state.address_mode,  # NEW
         )
 
         # Log to Langfuse if enabled
@@ -371,7 +382,7 @@ class TherapistAgent:
             async with get_db_session() as session:
                 agent_log_repo = AgentLogRepository(session)
                 await agent_log_repo.log_llm_call(
-                    user_id=user_id,
+                    account_id=user_id,  # NEW: account_id instead of user_id
                     agent_type="therapist",
                     task_name="generate_response",
                     model=self.settings.llm_therapist_model,
@@ -387,12 +398,15 @@ class TherapistAgent:
                     session_id=state.session_db_id,
                     langfuse_trace_id=trace.id if trace else None,
                 )
-        
+
         if result["success"]:
             raw_response = result["content"]
             clean_response = raw_response.replace('\\"', '"')
             clean_response = clean_response.strip('"')
             return clean_response
 
-        # Return Russian fallback since prescreening and UI are in Russian
-        return TherapistPrompts.get_fallback_response(language="ru")
+        # Return Russian fallback adapted to address_mode
+        return TherapistPrompts.get_fallback_response(
+            language="ru",
+            address_mode=state.address_mode,  # NEW
+        )

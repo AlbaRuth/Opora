@@ -1,5 +1,7 @@
 """
 Intake agent for initial clinical card collection.
+NEW: Uses normalized schema (ClinicalProfileRepository), includes address_mode, context window,
+and anti-repetition logic for more natural dialogue.
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from typing import Any
 
 from core.config import get_settings
 from core.logging import LogContexts, get_logger
-from db.repositories import AgentLogRepository, UserRepository
+from db.repositories import AgentLogRepository, ClinicalProfileRepository, MessageRepository
 from db.session import get_db_session
 from integrations.langfuse import get_current_trace_id
 from integrations.openrouter import OpenRouterClient
@@ -27,71 +29,144 @@ class IntakeAgent:
         self.settings = get_settings()
         self.llm_client = OpenRouterClient()
 
+    def _compute_max_user_turns(self) -> int | None:
+        """Compute maximum user turns for intake based on settings."""
+        multiplier = getattr(self.settings, 'intake_max_user_turns_multiplier', 2)
+        return self.settings.intake_min_user_turns * multiplier
+
+    def _get_context_window_size(self) -> int:
+        """Get the size of the dialogue context window."""
+        multiplier = getattr(self.settings, 'intake_context_window_multiplier', 2)
+        return self.settings.intake_min_user_turns * multiplier
+
+    async def _get_recent_dialogue(
+        self,
+        session_id: int,
+        limit: int,
+    ) -> list[dict[str, str]]:
+        """Get recent dialogue messages for context window."""
+        async with get_db_session() as session:
+            message_repo = MessageRepository(session)
+            messages = await message_repo.get_recent_messages(session_id, limit=limit)
+            return [
+                {"role": "user" if msg.role == "patient" else "assistant", "content": msg.content}
+                for msg in messages
+            ]
+
     async def process_patient_input(
         self,
         patient_text: str,
         state: SessionState,
     ) -> dict[str, Any]:
         """Process one intake turn and return next intake response."""
-        user_id = int(state.patient_id)
+        account_id = int(state.patient_id)
         trace_id = get_current_trace_id()
+        max_user_turns = self._compute_max_user_turns()
 
         async with get_db_session() as session:
-            user_repo = UserRepository(session)
-            user = await user_repo.get_by_id(user_id)
-            if not user:
+            clinical_repo = ClinicalProfileRepository(session)
+
+            # Get current clinical card
+            current_card = await clinical_repo.get_patient_record(account_id)
+            if not current_card:
+                # Fallback if no clinical profile exists
                 return {
-                    "therapist_response": IntakePrompts.get_fallback_intake_response(state.patient_display_name),
+                    "therapist_response": IntakePrompts.get_fallback_intake_response(
+                        state.patient_display_name,
+                        state.address_mode,
+                        state.therapist_gender,
+                    ),
                     "intake_completed": False,
                     "missing_fields": self.settings.intake_required_fields_list,
                     "card_updates": {},
                 }
 
-            current_card = user.get_patient_record()
+            # Get recent dialogue for context window
+            context_window_size = self._get_context_window_size()
+            recent_dialogue = []
+            if state.session_db_id:
+                recent_dialogue = await self._get_recent_dialogue(
+                    state.session_db_id,
+                    limit=context_window_size,
+                )
+
+            # Build prompt with context window and limit
             prompt = IntakePrompts.get_intake_turn_prompt(
                 patient_message=patient_text,
                 patient_name=state.patient_display_name,
                 patient_age=state.patient_age,
+                patient_sex=state.patient_sex,
+                address_mode=state.address_mode,
                 current_card=current_card,
                 min_user_turns=self.settings.intake_min_user_turns,
                 current_user_turns=state.intake_user_turns,
                 required_fields=self.settings.intake_required_fields_list,
-                max_question_words=self.settings.intake_max_question_words,
-                summary_max_words=self.settings.intake_summary_max_words,
+                max_user_turns=max_user_turns,
+                recent_dialogue=recent_dialogue,
+                therapist_name=state.therapist_name,
+                therapist_gender=state.therapist_gender,
+                therapist_traits=state.therapist_traits,
             )
 
             result = await self.llm_client.chat_completion(
                 model=self.settings.llm_intake_model,
                 messages=[
-                    {"role": "system", "content": IntakePrompts.get_system_message()},
+                    {
+                        "role": "system",
+                        "content": IntakePrompts.get_system_message(
+                            therapist_name=state.therapist_name,
+                            therapist_gender=state.therapist_gender,
+                            therapist_traits=state.therapist_traits,
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=self.settings.llm_intake_temperature,
                 max_tokens=self.settings.llm_intake_max_tokens,
                 task_name="intake_turn",
+                top_p=getattr(self.settings, 'llm_intake_top_p', None),
+                frequency_penalty=getattr(self.settings, 'llm_intake_frequency_penalty', None),
+                presence_penalty=getattr(self.settings, 'llm_intake_presence_penalty', None),
             )
 
             parsed = self._parse_json_content(result["content"]) if result["success"] else {}
             merged = self._merge_card(current_card, parsed)
             missing_required = self._missing_required_fields(merged)
             user_turns_after_processing = state.intake_user_turns + 1
+
+            # Check for completion: either normal completion OR max turns reached
+            reached_max_turns = max_user_turns and user_turns_after_processing >= max_user_turns
             is_complete = (
-                bool(parsed.get("is_intake_complete", False))
-                and user_turns_after_processing >= self.settings.intake_min_user_turns
-                and not missing_required
+                (bool(parsed.get("is_intake_complete", False))
+                 and user_turns_after_processing >= self.settings.intake_min_user_turns
+                 and not missing_required)
+                or reached_max_turns
             )
 
-            await user_repo.update_patient_card(
-                user_id=user_id,
-                mental_health=merged["mental_health_history"],
-                physical_health=merged["physical_health_history"],
-                problems=merged["current_problems"],
+            # Flag for insufficient initial information if max turns reached with missing fields
+            initial_info_insufficient = False
+            if reached_max_turns and missing_required:
+                initial_info_insufficient = True
+                # Prepend warning to hypothesis explanation
+                insufficient_note = (
+                    "Первоначально было дано недостаточно информации для полноценного первичного профиля; "
+                    "выводы предварительны и ограничены доступными данными. "
+                )
+                merged["intake_hypothesis_explanation"] = insufficient_note + merged.get("intake_hypothesis_explanation", "")
+
+            # Update clinical profile using new repository
+            await clinical_repo.update_clinical_data(
+                account_id=account_id,
+                mental_health_history=merged["mental_health_history"],
+                physical_health_history=merged["physical_health_history"],
+                current_problems=merged["current_problems"],
                 intake_hypothesis=merged["intake_hypothesis"],
                 intake_hypothesis_explanation=merged["intake_hypothesis_explanation"],
+                initial_info_insufficient=initial_info_insufficient,
             )
 
             await self._log_call(
-                user_id=user_id,
+                account_id=account_id,
                 session_id=state.session_db_id,
                 prompt=prompt,
                 result=result,
@@ -102,17 +177,25 @@ class IntakeAgent:
                     "intake_user_turns_after": user_turns_after_processing,
                     "missing_required_fields": missing_required,
                     "is_intake_complete": is_complete,
+                    "initial_info_insufficient": initial_info_insufficient,
+                    "patient_sex": state.patient_sex,
+                    "address_mode": state.address_mode,
                 },
             )
 
             response_text = self._safe_text(parsed.get("patient_response_ru"))
             if not response_text:
-                response_text = IntakePrompts.get_fallback_intake_response(state.patient_display_name)
+                response_text = IntakePrompts.get_fallback_intake_response(
+                    state.patient_display_name,
+                    state.address_mode,
+                    state.therapist_gender,
+                )
 
             return {
                 "therapist_response": response_text,
                 "intake_completed": is_complete,
                 "missing_fields": missing_required,
+                "initial_info_insufficient": initial_info_insufficient,
                 "card_updates": merged,
             }
 
@@ -122,16 +205,17 @@ class IntakeAgent:
         state: SessionState,
     ) -> dict[str, str]:
         """Background card update during therapy stage without user confirmation."""
-        user_id = int(state.patient_id)
+        account_id = int(state.patient_id)
         trace_id = get_current_trace_id()
 
         async with get_db_session() as session:
-            user_repo = UserRepository(session)
-            user = await user_repo.get_by_id(user_id)
-            if not user:
+            clinical_repo = ClinicalProfileRepository(session)
+
+            # Get current clinical card
+            current_card = await clinical_repo.get_patient_record(account_id)
+            if not current_card:
                 return {}
 
-            current_card = user.get_patient_record()
             prompt = IntakePrompts.get_background_update_prompt(
                 patient_message=patient_text,
                 current_card=current_card,
@@ -139,12 +223,22 @@ class IntakeAgent:
             result = await self.llm_client.chat_completion(
                 model=self.settings.llm_intake_model,
                 messages=[
-                    {"role": "system", "content": IntakePrompts.get_system_message()},
+                    {
+                        "role": "system",
+                        "content": IntakePrompts.get_system_message(
+                            therapist_name=state.therapist_name,
+                            therapist_gender=state.therapist_gender,
+                            therapist_traits=state.therapist_traits,
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=self.settings.llm_intake_temperature,
                 max_tokens=self.settings.llm_intake_max_tokens,
                 task_name="intake_background_update",
+                top_p=getattr(self.settings, 'llm_intake_top_p', None),
+                frequency_penalty=getattr(self.settings, 'llm_intake_frequency_penalty', None),
+                presence_penalty=getattr(self.settings, 'llm_intake_presence_penalty', None),
             )
             parsed = self._parse_json_content(result["content"]) if result["success"] else {}
             updates = {
@@ -156,17 +250,17 @@ class IntakeAgent:
             }
             normalized_updates = {k: v for k, v in updates.items() if v}
             if normalized_updates:
-                await user_repo.update_patient_card(
-                    user_id=user_id,
-                    mental_health=normalized_updates.get("mental_health_history"),
-                    physical_health=normalized_updates.get("physical_health_history"),
-                    problems=normalized_updates.get("current_problems"),
+                await clinical_repo.update_clinical_data(
+                    account_id=account_id,
+                    mental_health_history=normalized_updates.get("mental_health_history"),
+                    physical_health_history=normalized_updates.get("physical_health_history"),
+                    current_problems=normalized_updates.get("current_problems"),
                     intake_hypothesis=normalized_updates.get("intake_hypothesis"),
                     intake_hypothesis_explanation=normalized_updates.get("intake_hypothesis_explanation"),
                 )
 
             await self._log_call(
-                user_id=user_id,
+                account_id=account_id,
                 session_id=state.session_db_id,
                 prompt=prompt,
                 result=result,
@@ -223,7 +317,7 @@ class IntakeAgent:
 
     async def _log_call(
         self,
-        user_id: int,
+        account_id: int,
         session_id: int | None,
         prompt: str,
         result: dict[str, Any],
@@ -233,7 +327,7 @@ class IntakeAgent:
         async with get_db_session() as session:
             agent_log_repo = AgentLogRepository(session)
             await agent_log_repo.log_llm_call(
-                user_id=user_id,
+                account_id=account_id,
                 session_id=session_id,
                 agent_type="intake",
                 task_name=metadata.get("background_update") and "intake_background_update" or "intake_turn",

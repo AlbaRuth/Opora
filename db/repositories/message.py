@@ -76,3 +76,11 @@ class MessageRepository(BaseRepository[Message]):
             .where(Message.session_id == session_id)
         )
         return len(result.scalars().all())
+
+    async def get_recent_messages(
+        self,
+        session_id: int,
+        limit: int = 10,
+    ) -> list[Message]:
+        """Get recent messages for session (alias for get_latest_messages)."""
+        return await self.get_latest_messages(session_id, count=limit)

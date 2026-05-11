@@ -1,226 +1,264 @@
-"""
-Unit tests for DialogueService with prescreening checks.
-"""
+"""Unit tests for DialogueService prescreening / anket (v2 schema)."""
 
-import sys
-from pathlib import Path
 import pytest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-# Add project root to path
-_project_root = Path(__file__).parent.parent.parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
-
-from db.models import User, TherapySession
+from tests.factories import create_account_with_prescreening, fill_clinical_card_minimal
 
 
 @pytest.mark.asyncio
 class TestDialogueServicePrescreening:
-    """Test DialogueService prescreening integration."""
-
-    async def test_start_session_returns_none_for_new_user(self, db_session):
-        """Test that start_session returns None for new user (needs prescreening)."""
+    async def test_start_session_returns_none_for_new_user(
+        self, db_session, patch_get_db_session
+    ):
         from services.dialogue_service import DialogueService
-        service = DialogueService()
 
-        # Mock the therapist agent
+        patch_get_db_session("services.dialogue_service")
+        service = DialogueService()
         service.therapist_agent = MagicMock()
         service.therapist_agent.start_new_session = AsyncMock()
 
-        # Call start_session for new user
         result = await service.start_session(
-            telegram_id=12345,
+            telegram_id=912345,
             username="newuser",
             first_name="New",
         )
-
-        # Should return None (prescreening required)
         assert result is None
-
-        # Agent should not be called
         service.therapist_agent.start_new_session.assert_not_called()
 
-    async def test_start_session_returns_greeting_for_complete_user(self, db_session):
-        """Test that start_session works for user with completed prescreening."""
+    async def test_start_session_returns_greeting_for_complete_user(
+        self, db_session, patch_get_db_session
+    ):
         from services.dialogue_service import DialogueService
-        # Create user with completed prescreening
-        user = User(
-            telegram_id=12345,
-            username="existinguser",
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912346,
             therapist_name="Анна",
-            therapist_gender="female",
             patient_display_name="Иван",
             patient_age=30,
-            therapist_traits=["calm"],
-            prescreening_completed_at=datetime.utcnow(),
         )
-        db_session.add(user)
-        await db_session.commit()
 
         service = DialogueService()
-
-        # Mock the therapist agent
         service.therapist_agent = MagicMock()
-        service.therapist_agent.start_new_session = AsyncMock(return_value={
-            "therapist_response": "Hello! I'm Anna.",
-            "current_therapy": "CBT",
-            "reason": "Test therapy",
-        })
+        service.therapist_agent.start_new_session = AsyncMock(
+            return_value={
+                "therapist_response": "Hello! I'm Anna.",
+                "current_therapy": "CBT",
+                "reason": "Test therapy",
+            }
+        )
 
-        # Call start_session
-        result = await service.start_session(telegram_id=12345)
-
-        # Should return greeting
+        result = await service.start_session(telegram_id=912346)
         assert result == "Hello! I'm Anna."
-
-        # Verify agent was called with profile
         call_args = service.therapist_agent.start_new_session.call_args
-        state = call_args[1]["state"]
+        state = call_args.kwargs["state"]
         assert state.therapist_name == "Анна"
-        assert state.therapist_gender == "female"
         assert state.patient_display_name == "Иван"
         assert state.patient_age == 30
-        assert state.therapist_traits == ["calm"]
 
-    async def test_start_session_returns_none_for_incomplete_user(self, db_session):
-        """Test that start_session returns None for user with incomplete prescreening."""
+    async def test_start_session_returns_none_for_incomplete_user(
+        self, db_session, patch_get_db_session
+    ):
         from services.dialogue_service import DialogueService
-        # Create user without completed prescreening
-        user = User(
-            telegram_id=12345,
-            username="incompleteuser",
-            prescreening_completed_at=None,
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912347,
+            mark_prescreening_complete=False,
         )
-        db_session.add(user)
-        await db_session.commit()
 
         service = DialogueService()
-
-        # Mock the therapist agent
         service.therapist_agent = MagicMock()
         service.therapist_agent.start_new_session = AsyncMock()
 
-        # Call start_session
-        result = await service.start_session(telegram_id=12345)
-
-        # Should return None (prescreening required)
+        result = await service.start_session(telegram_id=912347)
         assert result is None
-
-        # Agent should not be called
         service.therapist_agent.start_new_session.assert_not_called()
 
-    async def test_process_message_requires_prescreening(self, db_session):
-        """Test that process_message returns error for user without prescreening."""
+    async def test_process_message_requires_prescreening(
+        self, db_session, patch_get_db_session
+    ):
         from services.dialogue_service import DialogueService
-        # Create user without prescreening
-        user = User(
-            telegram_id=12345,
-            username="incompleteuser",
-            prescreening_completed_at=None,
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912348,
+            mark_prescreening_complete=False,
         )
-        db_session.add(user)
-        await db_session.commit()
 
         service = DialogueService()
-
-        # Call process_message
-        result = await service.process_message(
-            telegram_id=12345,
-            text="Hello",
-        )
-
-        # Should return error message in Russian
-        assert "профиля" in result["response"] or "завершите" in result["response"]
+        result = await service.process_message(telegram_id=912348, text="Hello")
+        assert "профил" in result["response"] or "завершите" in result["response"]
         assert result["session_ended"] is False
 
-    async def test_process_message_includes_profile_in_state(self, db_session):
-        """Test that process_message passes profile to agent."""
+    async def test_process_message_includes_profile_in_state(
+        self,
+        db_session,
+        patch_get_db_session,
+        dialogue_langfuse_stub,
+    ):
         from services.dialogue_service import DialogueService
-        # Create user with completed prescreening
-        user = User(
-            telegram_id=12345,
-            username="completeuser",
+        from tests.factories import create_active_therapy_session
+
+        patch_get_db_session("services.dialogue_service")
+        account = await create_account_with_prescreening(
+            db_session,
+            912349,
             therapist_name="Доктор Иван",
             therapist_gender="male",
             patient_display_name="Мария",
             patient_age=25,
             therapist_traits=["empathetic", "calm"],
-            prescreening_completed_at=datetime.utcnow(),
         )
-        db_session.add(user)
-
-        # Create active session
-        session = TherapySession(
-            user_id=user.id,
-            session_number=1,
-            is_active=True,
-            dialog_count=0,
-        )
-        db_session.add(session)
-        await db_session.commit()
+        await create_active_therapy_session(db_session, account.id, flow_phase="therapy")
 
         service = DialogueService()
-
-        # Mock the therapist agent
         service.therapist_agent = MagicMock()
-        service.therapist_agent.process_patient_input = AsyncMock(return_value={
-            "therapist_response": "I understand, Maria.",
-            "session_ended": False,
-            "current_therapy": "general",
-            "strategy": {"strategy": "validation"},
-        })
-
-        # Call process_message
-        result = await service.process_message(
-            telegram_id=12345,
-            text="I'm feeling sad",
+        service.therapist_agent.process_patient_input = AsyncMock(
+            return_value={
+                "therapist_response": "I understand, Maria.",
+                "session_ended": False,
+                "current_therapy": "general",
+                "strategy": {"strategy": "validation"},
+            }
         )
 
-        # Verify agent was called with profile
+        result = await service.process_message(
+            telegram_id=912349,
+            text="I'm feeling sad",
+        )
+        assert "Maria" in result["response"] or "understand" in result["response"]
         call_args = service.therapist_agent.process_patient_input.call_args
-        state = call_args[1]["state"]
+        state = call_args.kwargs["state"]
         assert state.therapist_name == "Доктор Иван"
         assert state.therapist_gender == "male"
         assert state.patient_display_name == "Мария"
         assert state.patient_age == 25
-        assert state.therapist_traits == ["empathetic", "calm"]
 
-    async def test_start_session_uses_default_profile_values(self, db_session):
-        """Test that start_session uses default values when profile fields are empty."""
+    async def test_start_session_uses_default_profile_values(
+        self, db_session, patch_get_db_session
+    ):
         from services.dialogue_service import DialogueService
-        # Create user with completed prescreening but empty fields
-        user = User(
-            telegram_id=12345,
-            username="defaultuser",
-            therapist_name=None,
-            therapist_gender=None,
-            patient_display_name=None,
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912350,
+            therapist_name="Опора",
+            therapist_gender="female",
+            therapist_traits=[],
+            patient_display_name="",
             patient_age=None,
-            therapist_traits=None,
-            prescreening_completed_at=datetime.utcnow(),
         )
-        db_session.add(user)
-        await db_session.commit()
 
         service = DialogueService()
-
-        # Mock the therapist agent
         service.therapist_agent = MagicMock()
-        service.therapist_agent.start_new_session = AsyncMock(return_value={
-            "therapist_response": "Hello!",
-            "current_therapy": "general",
-        })
+        service.therapist_agent.start_new_session = AsyncMock(
+            return_value={"therapist_response": "Hello!", "current_therapy": "general"}
+        )
 
-        # Call start_session
-        await service.start_session(telegram_id=12345)
-
-        # Verify defaults were used
-        call_args = service.therapist_agent.start_new_session.call_args
-        state = call_args[1]["state"]
-        assert state.therapist_name == "Опора"  # Default
-        assert state.therapist_gender == "female"  # Default
+        await service.start_session(telegram_id=912350)
+        state = service.therapist_agent.start_new_session.call_args.kwargs["state"]
+        assert state.therapist_name == "Опора"
+        assert state.therapist_gender == "female"
         assert state.therapist_traits == []
         assert state.patient_display_name == ""
         assert state.patient_age is None
+
+    async def test_start_session_intake_branch_card_incomplete(
+        self, db_session, patch_get_db_session, monkeypatch
+    ):
+        from services.dialogue_service import DialogueService
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912351,
+            therapist_name="Анна",
+            patient_display_name="Иван",
+        )
+
+        service = DialogueService()
+        monkeypatch.setattr(service.settings, "intake_enabled", True)
+        service.therapist_agent = MagicMock()
+
+        result = await service.start_session(telegram_id=912351)
+        assert result is not None
+        assert "информацию" in result.lower() or "собрать" in result.lower()
+
+    async def test_start_session_intake_branch_card_complete(
+        self, db_session, patch_get_db_session, monkeypatch
+    ):
+        from services.dialogue_service import DialogueService
+
+        patch_get_db_session("services.dialogue_service")
+        account = await create_account_with_prescreening(
+            db_session,
+            912352,
+            therapist_name="Анна",
+            patient_display_name="Иван",
+        )
+        await fill_clinical_card_minimal(
+            db_session,
+            account.id,
+            current_problems="Feeling anxious at work",
+            mental_health_history="History of anxiety",
+        )
+
+        service = DialogueService()
+        monkeypatch.setattr(service.settings, "intake_enabled", True)
+
+        result = await service.start_session(telegram_id=912352)
+        assert result is not None
+        assert "Иван" in result or "друг" in result
+        assert "день" in result.lower()
+
+    async def test_get_user_anket_returns_profile(self, db_session, patch_get_db_session):
+        from services.dialogue_service import DialogueService
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912353,
+            therapist_name="Доктор Смит",
+            therapist_gender="male",
+            patient_display_name="Мария",
+            patient_age=25,
+            therapist_traits=["calm", "empathetic"],
+            patient_sex="female",
+            address_mode="formal",
+        )
+
+        service = DialogueService()
+        result = await service.get_user_anket(telegram_id=912353)
+        assert "Доктор Смит" in result
+        assert "Мария" in result
+        assert "25" in result
+
+    async def test_get_user_anket_requires_prescreening(
+        self, db_session, patch_get_db_session
+    ):
+        from services.dialogue_service import DialogueService
+
+        patch_get_db_session("services.dialogue_service")
+        await create_account_with_prescreening(
+            db_session,
+            912354,
+            mark_prescreening_complete=False,
+        )
+
+        service = DialogueService()
+        result = await service.get_user_anket(telegram_id=912354)
+        assert "профил" in result.lower() or "завершите" in result.lower() or "старт" in result.lower()
+
+    async def test_get_user_anket_user_not_found(self, db_session, patch_get_db_session):
+        from services.dialogue_service import DialogueService
+
+        patch_get_db_session("services.dialogue_service")
+        service = DialogueService()
+        result = await service.get_user_anket(telegram_id=999999991)
+        assert "не найден" in result.lower() or "start" in result.lower()

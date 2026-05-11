@@ -14,13 +14,13 @@ from .base import BaseRepository
 
 class AgentLogRepository(BaseRepository[AgentLog]):
     """Repository for AgentLog operations."""
-    
+
     def __init__(self, session: AsyncSession):
         super().__init__(session, AgentLog)
-    
+
     async def log_llm_call(
         self,
-        user_id: int,
+        account_id: int,
         agent_type: str,
         task_name: str,
         model: str,
@@ -41,7 +41,7 @@ class AgentLogRepository(BaseRepository[AgentLog]):
     ) -> AgentLog:
         """Log LLM agent execution."""
         return await self.create(
-            user_id=user_id,
+            account_id=account_id,
             session_id=session_id,
             agent_type=agent_type,
             task_name=task_name,
@@ -60,21 +60,21 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             langfuse_generation_id=langfuse_generation_id,
             extra_metadata=metadata,
         )
-    
-    async def get_user_logs(
+
+    async def get_account_logs(
         self,
-        user_id: int,
+        account_id: int,
         limit: int = 100,
     ) -> list[AgentLog]:
-        """Get agent logs for user."""
+        """Get agent logs for account."""
         result = await self.session.execute(
             select(AgentLog)
-            .where(AgentLog.user_id == user_id)
+            .where(AgentLog.account_id == account_id)
             .order_by(desc(AgentLog.created_at))
             .limit(limit)
         )
         return result.scalars().all()
-    
+
     async def get_session_logs(
         self,
         session_id: int,
@@ -86,17 +86,17 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             .order_by(AgentLog.created_at)
         )
         return result.scalars().all()
-    
+
     async def get_task_logs(
         self,
-        user_id: int,
+        account_id: int,
         task_name: str,
         limit: int = 50,
     ) -> list[AgentLog]:
         """Get logs for specific task."""
         result = await self.session.execute(
             select(AgentLog)
-            .where(AgentLog.user_id == user_id)
+            .where(AgentLog.account_id == account_id)
             .where(AgentLog.task_name == task_name)
             .order_by(desc(AgentLog.created_at))
             .limit(limit)

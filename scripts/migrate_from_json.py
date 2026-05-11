@@ -1,17 +1,22 @@
 """
-Migration script: JSON -> PostgreSQL.
-Migrates existing Opora JSON data to new PostgreSQL database.
+Migration script: JSON -> PostgreSQL (New Schema v2.0).
+Migrates existing Opora JSON data to new PostgreSQL database with normalized schema.
 """
 
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 from core import configure_logging, get_logger, LogContexts
-from db import get_db_session, init_db
-from db.repositories import UserRepository, SessionRepository, MessageRepository, DecisionLogRepository
+from db import get_db_session
+from db.repositories import (
+    AccountRepository,
+    ClinicalProfileRepository,
+    SessionRepository,
+    MessageRepository,
+    DecisionLogRepository,
+)
 
 logger = get_logger(LogContexts.SERVICE)
 
@@ -19,51 +24,51 @@ logger = get_logger(LogContexts.SERVICE)
 async def migrate_patient_record(
     patient_id: str,
     data: dict[str, Any],
-    user_repo: UserRepository,
+    account_repo: AccountRepository,
+    clinical_repo: ClinicalProfileRepository,
     session_repo: SessionRepository,
     message_repo: MessageRepository,
     decision_repo: DecisionLogRepository,
 ) -> None:
-    """Migrate single patient record from JSON to DB."""
+    """Migrate single patient record from JSON to DB (New Schema)."""
     logger.info("migrating_patient", patient_id=patient_id)
-    
+
     # Extract patient record info
     patient_record = data.get("patient_record", {})
     sessions = data.get("sessions", {})
-    
-    # Create user (using patient_id as telegram_id for migration)
+
+    # Create account (using patient_id as telegram_id for migration)
     telegram_id = int(patient_id.replace("patient_", "").replace("user_", ""))
-    
-    existing_user = await user_repo.get_by_telegram_id(telegram_id)
-    if existing_user:
-        user = existing_user
+
+    existing_account = await account_repo.get_by_telegram_id(telegram_id)
+    if existing_account:
+        account = existing_account
     else:
-        user = await user_repo.create_from_telegram(
+        # Create account with profiles (new schema)
+        account = await account_repo.create_from_telegram(
             telegram_id=telegram_id,
             username=f"migrated_user_{patient_id}",
         )
-        
-        # Update medical record
-        await user_repo.update_medical_record(
-            user_id=user.id,
-            pseudonym=patient_record.get("patient pseudonym"),
-            age=patient_record.get("patient age"),
-            mental_health=patient_record.get("mental health history"),
-            physical_health=patient_record.get("physical health history"),
-            problems=patient_record.get("current problems and symptoms"),
+
+        # Update clinical profile (new schema - clinical.clinical_profiles)
+        await clinical_repo.update_clinical_data(
+            account_id=account.id,
+            mental_health_history=patient_record.get("mental health history"),
+            physical_health_history=patient_record.get("physical health history"),
+            current_problems=patient_record.get("current problems and symptoms"),
         )
-    
-    # Migrate sessions
+
+    # Migrate sessions (account_id instead of user_id)
     for session_key, session_data in sessions.items():
         session_num = int(session_key.replace("session_", ""))
-        
-        # Create session
+
+        # Create session with account_id
         session = await session_repo.create_session(
-            user_id=user.id,
+            account_id=account.id,
             session_number=session_num,
             therapy_type=session_data.get("therapy", "unspecified therapy"),
         )
-        
+
         # Migrate dialogs
         dialogs = session_data.get("dialogs", [])
         for idx, dialog in enumerate(dialogs, start=1):
@@ -81,54 +86,53 @@ async def migrate_patient_record(
                 else:
                     role = "doctor"
                 content = dialog
-            
+
             await message_repo.create_message(
                 session_id=session.id,
                 role=role,
                 content=content,
                 message_number=idx,
             )
-        
+
         # End session if it has dialogs
         if dialogs:
             await session_repo.end_session(session.id)
-    
-    logger.info("patient_migrated", patient_id=patient_id, user_id=user.id)
+
+    logger.info("patient_migrated", patient_id=patient_id, account_id=account.id)
 
 
 async def migrate_decision_data(
     patient_id: str,
     data: dict[str, Any],
     decision_repo: DecisionLogRepository,
-    user_repo: UserRepository,
+    account_repo: AccountRepository,
+    session_repo: SessionRepository,
 ) -> None:
-    """Migrate decision data from JSON file."""
+    """Migrate decision data from JSON file (New Schema)."""
     logger.info("migrating_decisions", patient_id=patient_id)
-    
+
     telegram_id = int(patient_id.replace("patient_", "").replace("user_", ""))
-    user = await user_repo.get_by_telegram_id(telegram_id)
-    
-    if not user:
-        logger.warning("user_not_found_for_decisions", patient_id=patient_id)
+    account = await account_repo.get_by_telegram_id(telegram_id)
+
+    if not account:
+        logger.warning("account_not_found_for_decisions", patient_id=patient_id)
         return
-    
-    # Get user sessions to map decision data
-    from db.repositories import SessionRepository
-    session_repo = SessionRepository(decision_repo.session)
-    sessions = await session_repo.get_all_user_sessions(user.id)
+
+    # Get account sessions to map decision data
+    sessions = await session_repo.get_all_account_sessions(account.id)
     session_map = {s.session_number: s.id for s in sessions}
-    
+
     # Migrate decision data
     for session_key, responses in data.items():
         session_num = int(session_key.replace("session_", ""))
         session_id = session_map.get(session_num)
-        
+
         if not session_id:
             continue
-        
+
         for response_key, decision_data in responses.items():
             response_num = int(response_key.replace("response_", ""))
-            
+
             await decision_repo.log_decision(
                 session_id=session_id,
                 response_number=response_num,
@@ -146,69 +150,69 @@ async def migrate_decision_data(
 
 
 async def main():
-    """Main migration function."""
+    """Main migration function (New Schema v2.0)."""
     configure_logging(level="INFO")
-    
-    logger.info("migration_started")
-    
-    # Initialize database
-    await init_db()
-    
+
+    logger.info("migration_started", schema_version="2.0")
+
     # Define paths
     save_data_dir = Path("save_data")
     eval_data_dir = Path("eval_data")
-    
+
     if not save_data_dir.exists():
         logger.error("save_data_directory_not_found", path=str(save_data_dir))
         return
-    
+
     async with get_db_session() as session:
-        user_repo = UserRepository(session)
+        account_repo = AccountRepository(session)
+        clinical_repo = ClinicalProfileRepository(session)
         session_repo = SessionRepository(session)
         message_repo = MessageRepository(session)
         decision_repo = DecisionLogRepository(session)
-        
+
         # Migrate patient records
         migrated_count = 0
         for json_file in save_data_dir.glob("*.json"):
             patient_id = json_file.stem
-            
+
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
+
                 await migrate_patient_record(
                     patient_id=patient_id,
                     data=data,
-                    user_repo=user_repo,
+                    account_repo=account_repo,
+                    clinical_repo=clinical_repo,
                     session_repo=session_repo,
                     message_repo=message_repo,
                     decision_repo=decision_repo,
                 )
                 migrated_count += 1
-                
+
             except Exception as e:
                 logger.error("migration_failed_for_patient", patient_id=patient_id, error=str(e))
-        
+
         # Migrate decision data
         if eval_data_dir.exists():
             for json_file in eval_data_dir.glob("decision basis_*.json"):
                 patient_id = json_file.stem.replace("decision basis_", "")
-                
+
                 try:
                     with open(json_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-                    
+
                     await migrate_decision_data(
                         patient_id=patient_id,
                         data=data,
                         decision_repo=decision_repo,
-                        user_repo=user_repo,
+                        account_repo=account_repo,
+                        session_repo=session_repo,
                     )
-                    
+
                 except Exception as e:
                     logger.error("decision_migration_failed", patient_id=patient_id, error=str(e))
-    
+
     logger.info("migration_completed", migrated_patients=migrated_count)
 
 

@@ -1,32 +1,66 @@
-# Opora — агент психологического консультирования
+# Opora — агент психологического консультирования v2.0
 
-Рефакторинг архитектуры с сохранением исходной логики агента и переходом на современную инфраструктуру.
+Рефакторинг архитектуры с нормализованной схемой БД, персонализацией через address_mode (ты/вы) и сохранением исходной логики агента.
+
+## Новое в v2.0
+
+### Персонализация общения
+- **Пол пациента** — выбор между мужским/женским/не хочу указывать
+- **Стиль обращения** — формальный (вы) или неформальный (ты)
+- Агенты адаптируют грамматику и тон в зависимости от выбора
+
+### Нормализованная архитектура БД
+- Разделение на 5 схем: identity, profile, clinical, therapy, observability
+- Разделение перегруженной таблицы `users` на логические сущности
+- Новая таблица `intake_states` отдельно от сессий
+- Полная переработка репозиториев под новую схему
 
 ## Архитектура
 
 ```
-OporaNew/
+Opora/
 ├── core/              # Конфигурация и логирование
-├── db/                # Модели БД, репозитории, управление сессиями
-├── agents/            # Логика агента (сохранена из оригинала)
-│   ├── core/          # TherapistAgent
+├── db/                # Модели БД, репозитории, миграции
+│   ├── models/        # SQLAlchemy модели по схемам
+│   │   ├── account.py           # identity.accounts
+│   │   ├── user_profile.py      # profile.user_profiles (NEW fields)
+│   │   ├── therapist_pref.py    # profile.therapist_preferences
+│   │   ├── clinical_profile.py  # clinical.clinical_profiles
+│   │   ├── therapy_session.py   # therapy.therapy_sessions
+│   │   ├── intake_state.py      # therapy.intake_states (NEW)
+│   │   ├── message.py           # therapy.messages
+│   │   ├── decision_log.py      # therapy.decision_logs
+│   │   └── agent_log.py         # observability.agent_logs
+│   └── repositories/  # Репозитории для каждой сущности
+├── agents/            # Логика агента
+│   ├── core/          # TherapistAgent, IntakeAgent, SessionState
 │   ├── evaluators/    # TherapistEvaluator
-│   └── prompts/       # Шаблоны промптов
+│   └── prompts/       # Шаблоны промптов (NEW: address_mode)
 ├── integrations/      # Внешние интеграции
+│   ├── telegram/      # Бот и prescreening flow (NEW steps)
 │   ├── openrouter/    # LLM-клиент
-│   ├── telegram/      # Интеграция с ботом
 │   └── langfuse/      # Наблюдаемость
-├── services/          # Слой бизнес-логики
-├── scripts/           # Скрипты миграции и утилиты
+├── services/          # Слой бизнес-логики (DialogueService)
+├── docs/              # Документация (NEW)
+│   ├── ARCHITECTURE.md
+│   ├── DATABASE.md
+│   └── API.md
 └── tests/             # Набор тестов
 ```
 
 ## Ключевые принципы
 
-1. **Логика агента сохранена**: вся логика принятия решений из оригинального `Opora/agent/` сохранена без изменений
-2. **Современная инфраструктура**: PostgreSQL, структурированное логирование, наблюдаемость через Langfuse
-3. **Слоистая архитектура**: четкое разделение между агентами, сервисами и интеграциями
-4. **Конфигурация через окружение**: все настройки задаются через `.env`
+1. **Логика агента сохранена**: вся логика принятия решений из оригинального `Opora/agent/` сохранена
+2. **Новая архитектура БД**: 5 схем вместо монолитной таблицы users
+3. **Персонализация**: пол пациента и стиль обращения (ты/вы) во всех промптах
+4. **Слоистая архитектура**: четкое разделение между агентами, сервисами и интеграциями
+5. **Конфигурация через окружение**: все настройки задаются через `.env`
+
+## Документация
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — архитектура системы и потоки данных
+- **[docs/DATABASE.md](docs/DATABASE.md)** — схема БД, таблицы, связи
+- **[docs/API.md](docs/API.md)** — API репозиториев и агентов
 
 ## Быстрый старт
 
@@ -43,8 +77,8 @@ cp .env.example .env
 # 3. Запустить PostgreSQL
 docker-compose up -d
 
-# 4. Применить миграции базы данных
-python scripts/migrate.py upgrade
+# 4. Применить миграции базы данных (Alembic)
+alembic upgrade head
 
 # 5. Запустить бота
 python bot_runner.py
@@ -64,12 +98,9 @@ cp .env.example .env
 # CREATE DATABASE opora;
 
 # 4. Применить миграции базы данных
-python scripts/migrate.py upgrade
+alembic upgrade head
 
-# 5. Проверить текущую версию миграций
-python scripts/migrate.py current
-
-# 6. Запустить бота
+# 5. Запустить бота
 python bot_runner.py
 ```
 
@@ -83,17 +114,6 @@ docker-compose down
 docker-compose down -v
 ```
 
-## Сохранение исходной логики
-
-Следующие файлы содержат сохраненную логику агента:
-
-- `agents/core/therapist_agent.py` — основная оркестрация агента (main.py, строки 39-289)
-- `agents/evaluators/therapist_evaluator.py` — вся логика оценки (evaluation.py)
-- `agents/prompts/therapist_prompts.py` — промпты генерации ответа
-- `agents/prompts/evaluator_prompts.py` — все промпты оценщика
-
-Все промпты, потоки принятия решений и критерии оценки идентичны оригинальной реализации Opora.
-
 ## Миграции базы данных (Alembic)
 
 Проект использует **Alembic** для версионирования схемы базы данных.
@@ -102,63 +122,71 @@ docker-compose down -v
 
 ```bash
 # Показать текущую версию миграции
-python scripts/migrate.py current
+alembic current
 
 # Показать историю миграций
-python scripts/migrate.py history
+alembic history
 
 # Применить все миграции (для новых баз)
-python scripts/migrate.py upgrade
+alembic upgrade head
 
 # Откатить на одну версию назад (осторожно!)
-python scripts/migrate.py downgrade
+alembic downgrade -1
 
 # Создать новую миграцию после изменения моделей
-python scripts/migrate.py revision --autogenerate -m "описание изменений"
-```
-
-### Для существующих баз данных (до Alembic)
-
-Если у вас есть существующая база, созданная до внедрения Alembic:
-
-```bash
-# 1. Пометить текущее состояние базы как baseline
-alembic stamp 001
-
-# 2. Применить все последующие миграции
-python scripts/migrate.py upgrade
+alembic revision --autogenerate -m "описание изменений"
 ```
 
 ### Workflow для разработчиков
 
 1. **Изменяете модели** в `db/models/`
-2. **Создаете миграцию**: `python scripts/migrate.py revision --autogenerate -m "добавлено поле X"`
+2. **Создаете миграцию**: `alembic revision --autogenerate -m "добавлено поле X"`
 3. **Проверяете SQL** в созданном файле `alembic/versions/`
-4. **Применяете**: `python scripts/migrate.py upgrade`
+4. **Применяете**: `alembic upgrade head`
 5. **Тестируете** и отправляете PR с моделями + миграцией
 
-## Схема базы данных
+## Тесты (pytest)
 
-### Users
-- Информация о пользователях Telegram
-- Кэш медицинской карты
+- Отдельная база PostgreSQL для тестов (пример имени: `opora_test`). URL по умолчанию задаётся в [`tests/conftest.py`](tests/conftest.py); при необходимости переопределите переменную окружения `DATABASE_URL` перед запуском.
+- При старте pytest миграции Alembic до `head` выполняются синхронно в хуке `pytest_configure` (так избегается конфликт `asyncio.run` внутри уже работающего цикла событий).
+- Запуск из виртуального окружения:
 
-### Therapy Sessions
-- Метаданные и состояние сессии
-- Тип терапии и обоснование
+```bash
+.\.venv\Scripts\python.exe -m pytest
+```
 
-### Messages
-- История диалога
-- Кэш анализа эмоций
+- Тесты, которым нужна БД, будут помечены как **skipped**, если PostgreSQL недоступен или миграция не применилась.
+- Нагрузочный сценарий в [`tests/integration/test_concurrent_session_handling.py`](tests/integration/test_concurrent_session_handling.py) по умолчанию отключён; чтобы включить: `set OPORA_RUN_INTEGRATION=1` (Windows) или `export OPORA_RUN_INTEGRATION=1` (Unix).
 
-### Decision Logs
-- Снимки решений агента
-- Полные данные решений для аудита
+## Схема базы данных v2.0
 
-### Agent Logs
-- Логи вызовов LLM с промптами/ответами
-- Задержка и расход токенов
-- Корреляция с Langfuse
+### Схемы PostgreSQL
+
+| Схема | Назначение | Таблицы |
+|-------|-----------|---------|
+| **identity** | Идентификация | `accounts` |
+| **profile** | Предпочтения | `user_profiles`, `therapist_preferences` |
+| **clinical** | Медицинские данные | `clinical_profiles` |
+| **therapy** | Сессии и диалоги | `therapy_sessions`, `intake_states`, `messages`, `decision_logs` |
+| **observability** | Логи и метрики | `agent_logs` |
+
+### Новые поля в профиле
+
+**profile.user_profiles**:
+- `sex` — пол пациента (male/female/prefer_not_to_say)
+- `address_mode` — стиль обращения (formal/informal)
+
+## Сохранение исходной логики
+
+Следующие файлы содержат сохраненную логику агента с расширениями:
+
+- `agents/core/therapist_agent.py` — основная оркестрация (с NEW: address_mode)
+- `agents/core/intake_agent.py` — сбор карточки (с NEW: address_mode в промптах)
+- `agents/core/session_state.py` — DTO состояния (с NEW: patient_sex, address_mode)
+- `agents/evaluators/therapist_evaluator.py` — логика оценки
+- `agents/prompts/therapist_prompts.py` — промпты с поддержкой formal/informal
+- `agents/prompts/intake_prompts.py` — промпты intake с address_mode
+- `agents/prompts/evaluator_prompts.py` — промпты оценщика
 
 ## Логирование
 
@@ -169,10 +197,11 @@ python scripts/migrate.py upgrade
 
 ## Переменные окружения
 
-Поддерживаются все переменные из `.env` проекта SupportAssistant:
+Поддерживаются все переменные из `.env`:
 
 - `DATABASE_URL` — подключение к PostgreSQL
 - `TELEGRAM_BOT_TOKEN` — токен бота
 - `OPENROUTER_*` — настройки LLM-провайдера
 - `LANGFUSE_*` — настройки наблюдаемости
 - `LOG_*` — конфигурация логирования
+- `INTAKE_*` — настройки intake-фазы

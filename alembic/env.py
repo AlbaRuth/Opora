@@ -64,6 +64,7 @@ def do_run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
+        include_schemas=True,  # Support for multi-schema database
     )
 
     with context.begin_transaction():
