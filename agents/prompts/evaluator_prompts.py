@@ -8,21 +8,38 @@ class EvaluatorPrompts:
     """Prompts for therapy evaluation tasks."""
     
     # Emotion assessment prompt (original lines 183-201)
+    # UPDATED: Added guidance on recognizing masked emotions and underlying feelings
     EMOTION_ASSESSMENT = """##Role:
-You are a professional and empathetic psychological counselor. 
+You are a professional and empathetic psychological counselor.
 Identify the primary emotion and assess its intensity in the patient's words.
 ##Criteria:
 The patient words: {patient_input}.
 1. primary_emotion:
-The primary emotion is the most intense one in the patient words. 
+The primary emotion is the most intense one in the patient words.
 You can only choose one from the list: ["joy", "sadness", "anger", "fear", "disgust", "surprise", "trust","anticipation"].
+
+IMPORTANT - Recognizing Masked Emotions:
+- Sometimes patients express one emotion while feeling another (e.g., anger masking hurt, humor masking anxiety).
+- Look for underlying feelings beneath surface expressions:
+  * Anger may mask: hurt, fear, vulnerability, shame
+  * Humor/jokes may mask: anxiety, discomfort, pain, fear
+  * Intellectual analysis may mask: emotional overwhelm, sadness, fear
+  * Withdrawal/"I don't know" may mask: fear, shame, helplessness
+- If you detect a masked emotion, identify the UNDERLYING feeling as primary_emotion.
+- Trust your clinical intuition about what the patient is really experiencing beneath their words.
+
 2. emotional_intensity:
-The intensity of the emotion you identified above(a float number from 0 to 1, where 0 indicates no emotion and 1 indicates very intense emotion). Please retain one decimal place.
+The intensity of the emotion you identified above (a float number from 0 to 1, where 0 indicates no emotion and 1 indicates very intense emotion). Please retain one decimal place.
+- 0.0-0.3: Low intensity, barely present
+- 0.4-0.6: Moderate intensity, clearly present
+- 0.7-0.8: High intensity, significantly impacting
+- 0.9-1.0: Very intense, overwhelming or crisis-level
+
 ##Constraints:
 Return your answer strictly in JSON format, like this:
 {{
-   "primary_emotion": "str",          
-   "emotional_intensity": "float"     
+   "primary_emotion": "str",
+   "emotional_intensity": "float"
 }}
 """
 
@@ -46,6 +63,7 @@ Directly output a Boolean value True or False.
 """
 
     # Response strategy prompt (original lines 207-257)
+    # UPDATED: Replaced problematic strategies with therapeutic ones aligned with professional ethics
     @staticmethod
     def get_strategy_prompt(
         patient_input: str,
@@ -55,7 +73,7 @@ Directly output a Boolean value True or False.
         session_strategy_memory: str,
     ) -> str:
         return f"""##Role:
-You are a professional and empathetic psychological counselor. 
+You are a professional and empathetic psychological counselor.
 Choose only one response strategy and provide the psychological counselor a response guidance.
 ##Requirements:
 1. Choose a response strategy as "strategy".
@@ -66,32 +84,39 @@ Choose only one response strategy and provide the psychological counselor a resp
   - whether the patient is rejecting or deviate from the topic: {"Yes" if is_rejecting else "No"}
 *Rules:
   Determine the patient's current attitude first and then choose a suitable strategy based on the information above. The attitude you judged must be strictly positive or negative.
-  * If patient attitude is "positive", then you can only strictly choose one suitable strategy from options A to D. 
-  * If patient attitude is "negative", then you can only strictly choose one suitable strategy from options E to I.
-  [Below are the options]: 
-    A. Interpretation (The counselor conducts in-depth analysis and explanation of the patient's words and actions, helping the patient view problems from different perspectives.)
-    B. Confrontation (The counselor directly points out the patient's unreasonable ideas, contradictory behaviors, or potential problems, prompting the patient to face reality.)
+  * If patient attitude is "positive", then you can only strictly choose one suitable strategy from options A to D.
+  * If patient attitude is "negative", then you can only strictly choose one suitable strategy from options E to J.
+  [Below are the options]:
+    A. Interpretation (The counselor conducts in-depth analysis and explanation of the patient's words and actions, helping the patient view problems from different perspectives. Use sparingly and only when client shows readiness.)
+    B. Gentle Challenge (The counselor gently invites the patient to consider alternative viewpoints or notice patterns, WITHOUT being confrontational or judgmental. The tone is curious, not corrective.)
     C. Invite to Take New Perspectives (The counselor guides clients to view problems from different perspectives and broaden their thinking.)
-    D. Invite to Explore New Actions (The counselor encourages the patient to try new behaviors or methods to solve problems and drive the patient to take positive actions.) 
-    E. Restatement (The counselor repeats what the patient says to confirm their understanding and also makes the client feel cared for.)
-    F. Reflection of Feelings (The counselor identifies and expresses patient's emotions, helping the patient better understand and accept his own feelings.)
-    G. Self-disclosure (The counselor shares own similar experiences or feelings to establish resonance and trust with the patient.)
-    H. Inquiring Subjective Information (The counselor asks the patient for subjective information such as thoughts, feelings, and expectations to gain a deeper understanding of the patient's inner world.)
-    I. Inquiring Objective Information (The counselor inquires about specific facts, data, and other objective information to gain a more accurate understanding of the patient's situation.)
-    G. Affirmation and Reassurance (The counselor provides affirmation and comforts to the patient's thoughts, feelings, or behaviors, enhancing the patient's confidence and sense of security.)
-    H. Minimal Encouragement (The counselor encourages the patient to continue expressing thoughts and feelings, through simple language or body movements.)
-    I. Answer (The counselor provides direct answers to the patient's questions and offers the information or advice the patient need.)
+    D. Invite to Explore New Actions (The counselor encourages the patient to consider new behaviors or methods, but the patient always chooses what feels right for them. No pressure.)
+    E. Empathic Reflection (PRIORITY strategy for high emotional intensity. The counselor identifies, acknowledges, and reflects patient's emotions without judgment or problem-solving. Helps patient feel understood.)
+    F. Restatement (The counselor repeats what the patient says in their own words to confirm understanding and show they are listening.)
+    G. Clarification (The counselor asks gentle questions to clarify what the patient means, without interrogating or assuming.)
+    H. Validation (The counselor acknowledges the legitimacy of patient's feelings and experiences, confirming that their reactions make sense given their context.)
+    I. Inquiring Subjective Information (The counselor asks open-ended questions about thoughts, feelings, and expectations to understand the patient's inner world. Focus on "how" and "what", not "why".)
+    J. Summarization (The counselor briefly summarizes key points from what the patient shared to help organize thoughts and show engagement.)
+  [IMPORTANT NOTES]:
+  - Empathic Reflection is the DEFAULT and PRIORITY strategy when emotional intensity > 0.6 or when emotions are negative (sadness, anxiety, fear, anger).
+  - Self-disclosure is REMOVED - the counselor must NEVER share personal experiences or feelings. This maintains professional boundaries.
+  - Confrontation is REMOVED - replaced with Gentle Challenge which is non-judgmental.
+  - Answer/Advice-giving is REMOVED - the counselor does NOT give direct advice or tell the patient what to do.
+  - Minimal Encouragement is REMOVED - it can feel dismissive; use Empathic Reflection or Validation instead.
+  - Affirmation and Reassurance is REMOVED - empty reassurance violates therapeutic boundaries; use Validation instead.
+  - Inquiring Objective Information is REMOVED - focus on subjective experience, not facts.
   [Notice]:
   Only return the strategy name of your selected option. For example, if you choose "A. Interpretation", then just return "Interpretation".
 2. Based on your strategy, generate a concise corresponding response strategy text of no more than 30 words to precisely guide the psychological counselor's response as "strategy_text".
 3. Make strategies more diverse, don't always stick to a single strategy.
-  In this session, you have used the following strategies: {session_strategy_memory}. Please try different strategies as much as possible as long as they are reasonable. 
+  In this session, you have used the following strategies: {session_strategy_memory}. Please try different strategies as much as possible as long as they are reasonable.
+  PRIORITY: Use Empathic Reflection more frequently than other strategies, especially for emotional content.
 ##Constraints:
 Strictly output the substantive content of your choice, excluding any option identifiers (such as 'A.', 'B.', 'C.', etc.) and things in parentheses.
 Return your answer strictly in JSON format, like this:
 {{
-   "strategy": "",          
-   "strategy_text": "" 
+   "strategy": "",
+   "strategy_text": ""
 }}
 """
 
@@ -149,11 +174,11 @@ Please determine if it is necessary to refer to the historical conversations to 
   - patient's current words: {patient_input}
 Only when you can find places in the historical conversations that are clearly related to the content of the patient's current words, and the places are not too far away from the current conversation, is it necessary to refer to history.
   * If reference is needed:
-    Summarize relevant historical content in no more than 50 words. Just directly return a concise and accurate summary.
+    Summarize relevant historical content in no more than 500 words. Just directly return a concise and accurate summary.
   * If no reference is needed:
     Directly return the sentence 'No need to consider historical conversation memory'.
 ##Constraints:
-Directly output your answer in English. Do not include any other analysis or explanation.
+Directly output your answer in Russian. Do not include any other analysis or explanation.
 """
 
     # Session end assessment prompt (original lines 360-369)

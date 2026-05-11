@@ -207,7 +207,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
     # Guard: don't process if in completion phase
     if state.step == "processing_completion":
         logger.debug("prescreening_completion_in_progress", user_id=user_id)
-        await message.answer("⏳ Подождите, завершаю настройку профиля...")
+        await message.answer("⏳ Подождите, завершаю настройку профиля")
         return True
 
     if state.step == "awaiting_therapist_name":
