@@ -17,9 +17,7 @@ from integrations.telegram.prescreening import (
     handle_prescreening_text,
     start_prescreening,
 )
-
-if TYPE_CHECKING:
-    from services.dialogue_service import DialogueService
+from services.dialogue_service import DialogueService
 
 logger = get_logger(LogContexts.TELEGRAM)
 

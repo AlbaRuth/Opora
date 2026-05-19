@@ -6,6 +6,7 @@ Alembic migrations run in sync context before the asyncio loop (env.py uses asyn
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 from alembic import command
@@ -32,6 +33,39 @@ def apply_alembic_migrations() -> None:
     alembic_cfg = Config(str(alembic_ini))
     alembic_cfg.set_main_option("script_location", str(project_root / "alembic"))
     command.upgrade(alembic_cfg, "head")
+
+
+def apply_alembic_migrations_with_retry(
+    *,
+    max_wait_seconds: int = 120,
+    initial_delay: float = 2.0,
+) -> None:
+    """
+    Повторяет миграции, пока БД недоступна (контейнер postgres ещё поднимается и т.п.).
+    """
+    deadline = time.monotonic() + max_wait_seconds
+    delay = initial_delay
+    last_error: Exception | None = None
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            apply_alembic_migrations()
+            if attempt > 1:
+                logger.info("database_migrations_applied_after_retry", attempts=attempt)
+            return
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "database_migration_attempt_failed",
+                attempt=attempt,
+                error=str(e),
+            )
+            time.sleep(delay)
+            delay = min(delay * 1.5, 15.0)
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("database_migration_retry_exhausted")
 
 
 async def main():
@@ -104,10 +138,18 @@ if __name__ == "__main__":
             backup_count=settings.log_file_backup_count,
         )
         try:
-            apply_alembic_migrations()
+            apply_alembic_migrations_with_retry()
             logger.info("database_migrations_applied")
         except Exception as e:
-            logger.error("database_migration_failed", error=str(e))
+            logger.error(
+                "database_migration_failed",
+                error=str(e),
+                hint=(
+                    "Убедитесь, что PostgreSQL слушает порт из DATABASE_URL "
+                    "(для docker-compose: из каталога Opora выполните "
+                    "`docker compose up -d postgres` и при необходимости задайте в .env хост 127.0.0.1)."
+                ),
+            )
             sys.exit(1)
 
         asyncio.run(main())

@@ -483,24 +483,6 @@ class DialogueService:
                         stage=state.current_stage,
                     )
 
-                if (
-                    self.settings.intake_background_update_enabled
-                    and self.settings.intake_background_update_every_user_turns > 0
-                ):
-                    current_user_turn = state.dialog_count + 1
-                    if current_user_turn % self.settings.intake_background_update_every_user_turns == 0:
-                        card_updates = await self.intake_agent.update_card_from_message(
-                            patient_text=text,
-                            state=state,
-                        )
-                        if card_updates:
-                            logger.info(
-                                "intake_card_updated",
-                                account_id=account.id,
-                                session_id=active_session.id,
-                                updated_fields=sorted(card_updates.keys()),
-                            )
-
                 if result.get("session_ended"):
                     await session_repo.end_session(active_session.id)
 

@@ -10,7 +10,7 @@ import json
 
 
 class IntakePrompts:
-    """Prompts for initial intake stage and background card updates."""
+    """Prompts for initial intake stage."""
 
     # CORE THERAPEUTIC PRINCIPLES (MANDATORY - NEVER VIOLATE)
     CORE_THERAPEUTIC_PRINCIPLES = """
@@ -195,7 +195,9 @@ CRITICAL: You MUST follow ALL boundary checks listed above for this style."""
             "If the patient asks your name or how to address you, give exactly that name — "
             'by default \"Опора\" if unsure. '
             "Never say you are an AI, bot, chatbot, or \"ИИ-ассистент\" / \"искусственный интеллект\". "
-            "CRITICAL: Any patient-facing text MUST be in Russian."
+            "CRITICAL: Any patient-facing text MUST be in Russian. "
+            "CRITICAL: All clinical card fields you produce (history, problems, hypothesis) "
+            "MUST be strictly in Russian."
         )
 
     @staticmethod
@@ -295,6 +297,11 @@ Return JSON ONLY with this exact schema:
 }}
 
 Rules for updating card fields:
+0) LANGUAGE (MANDATORY): All clinical card string fields — mental_health_history,
+   physical_health_history, current_problems, intake_hypothesis, intake_hypothesis_explanation —
+   MUST be written strictly in Russian, even if the patient writes in another language.
+   Translate relevant facts into Russian when updating the card; do not leave card fields in English
+   or mixed languages.
 1) Update fields only when patient provided enough new evidence; otherwise keep previous values.
 2) Keep hypothesis as preliminary and uncertain; never claim official diagnosis.
 3) Intake can be complete only if:
@@ -358,36 +365,6 @@ Current card:
 Current user turns in intake: {current_user_turns}{limit_context}{dialogue_context}
 
 This turn patient message:
-{patient_message}
-"""
-
-    @staticmethod
-    def get_background_update_prompt(
-        patient_message: str,
-        current_card: dict[str, str],
-    ) -> str:
-        card_json = json.dumps(current_card, ensure_ascii=False)
-        return f"""Extract structured updates from a therapy message.
-
-Return JSON ONLY:
-{{
-  "mental_health_history": "string_or_empty",
-  "physical_health_history": "string_or_empty",
-  "current_problems": "string_or_empty",
-  "intake_hypothesis": "string_or_empty",
-  "intake_hypothesis_explanation": "string_or_empty"
-}}
-
-Rules:
-- Keep existing card values unless message gives explicit new evidence.
-- If no update for a field, return empty string for that field.
-- No diagnosis claims; keep wording as preliminary hypothesis if applicable.
-- No extra keys, no markdown.
-
-Current card:
-{card_json}
-
-Patient message:
 {patient_message}
 """
 

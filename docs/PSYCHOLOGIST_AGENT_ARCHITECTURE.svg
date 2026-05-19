@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2500" height="1700" viewBox="0 0 2500 1700">
+  <defs>
+    <style>
+      .title { font: 700 28px Arial, sans-serif; fill: #1f1f1f; }
+      .subtitle { font: 14px Arial, sans-serif; fill: #333; }
+      .h1 { font: 700 20px Arial, sans-serif; fill: #1f1f1f; }
+      .h2 { font: 700 16px Arial, sans-serif; fill: #1f1f1f; }
+      .body { font: 13px Arial, sans-serif; fill: #222; }
+      .small { font: 12px Arial, sans-serif; fill: #333; }
+      .box-blue { fill: #dae8fc; stroke: #6c8ebf; stroke-width: 2; }
+      .box-green { fill: #e1f5d0; stroke: #82b366; stroke-width: 2; }
+      .box-orange { fill: #fff2cc; stroke: #d79b00; stroke-width: 2; }
+      .box-purple { fill: #f3e5f5; stroke: #9673a6; stroke-width: 2; }
+      .box-gray { fill: #f5f5f5; stroke: #666666; stroke-width: 2; }
+      .arrow-blue { stroke: #6c8ebf; stroke-width: 2.5; fill: none; marker-end: url(#arrowBlue); }
+      .arrow-green { stroke: #82b366; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
+      .arrow-orange { stroke: #d79b00; stroke-width: 2.5; fill: none; marker-end: url(#arrowOrange); }
+      .arrow-purple { stroke: #9673a6; stroke-width: 2.5; fill: none; marker-end: url(#arrowPurple); }
+      .arrow-gray { stroke: #666666; stroke-width: 2.5; fill: none; marker-end: url(#arrowGray); }
+    </style>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6c8ebf"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#82b366"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#d79b00"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#9673a6"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#666666"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="20" width="2380" height="70" rx="14" ry="14" class="box-blue"/>
+  <text x="1210" y="60" text-anchor="middle" class="title">Opora Agent Architecture</text>
+  <text x="1210" y="84" text-anchor="middle" class="subtitle">Intake prompts, evaluator prompts, therapist prompts, runtime order</text>
+
+  <rect x="20" y="110" width="2380" height="38" rx="10" ry="10" class="box-gray"/>
+  <text x="1210" y="134" text-anchor="middle" class="small">Blue = orchestration, green = intake, orange = evaluator, purple = therapist, gray = storage / observability</text>
+
+  <rect x="20" y="180" width="280" height="420" rx="14" ry="14" class="box-blue"/>
+  <text x="40" y="210" class="h1">Entry and orchestration</text>
+  <text x="40" y="245" class="h2">Telegram handlers</text>
+  <text x="40" y="267" class="body">- /start</text>
+  <text x="40" y="287" class="body">- regular message</text>
+  <text x="40" y="307" class="body">- /summary, /anket, /reset</text>
+  <text x="40" y="345" class="h2">DialogueService</text>
+  <text x="40" y="367" class="body">- start_session()</text>
+  <text x="40" y="387" class="body">- process_message()</text>
+  <text x="40" y="407" class="body">- create_session_silent()</text>
+  <text x="40" y="445" class="h2">SessionState</text>
+  <text x="40" y="467" class="body">Inputs: profile + therapist prefs</text>
+  <text x="40" y="487" class="body">+ clinical card + session + intake_state</text>
+  <text x="40" y="525" class="body">Output: runtime contract for agents</text>
+
+  <rect x="340" y="180" width="430" height="60" rx="14" ry="14" class="box-green"/>
+  <text x="555" y="215" text-anchor="middle" class="h1">IntakeAgent + IntakePrompts</text>
+  <text x="555" y="235" text-anchor="middle" class="small">Used when flow_phase = intake</text>
+
+  <rect x="340" y="260" width="430" height="180" rx="14" ry="14" class="box-green"/>
+  <text x="360" y="290" class="h2">get_system_message()</text>
+  <text x="360" y="315" class="body">Purpose: define intake counselor persona</text>
+  <text x="360" y="335" class="body">and intake-stage constraints.</text>
+  <text x="360" y="370" class="body">Inputs: therapist_name, therapist_gender,</text>
+  <text x="360" y="390" class="body">therapist_styles</text>
+  <text x="360" y="425" class="body">Output: intake LLM system prompt</text>
+
+  <rect x="340" y="455" width="430" height="295" rx="14" ry="14" class="box-green"/>
+  <text x="360" y="485" class="h2">get_intake_turn_prompt()</text>
+  <text x="360" y="510" class="body">Purpose: build or update clinical card</text>
+  <text x="360" y="530" class="body">for one intake turn.</text>
+  <text x="360" y="565" class="body">Inputs: patient_message, profile fields,</text>
+  <text x="360" y="585" class="body">address_mode, current_card, turns,</text>
+  <text x="360" y="605" class="body">required_fields, recent_dialogue,</text>
+  <text x="360" y="625" class="body">therapist persona</text>
+  <text x="360" y="660" class="body">Output: JSON with mental_history,</text>
+  <text x="360" y="680" class="body">physical_history, current_problems,</text>
+  <text x="360" y="700" class="body">intake_hypothesis, explanation,</text>
+  <text x="360" y="720" class="body">missing_fields, is_intake_complete,</text>
+  <text x="360" y="740" class="body">patient_response_ru</text>
+
+  <rect x="340" y="935" width="430" height="165" rx="14" ry="14" class="box-green"/>
+  <text x="360" y="965" class="h2">get_fallback_intake_response()</text>
+  <text x="360" y="990" class="body">Purpose: fallback question when intake</text>
+  <text x="360" y="1010" class="body">LLM did not return valid content.</text>
+  <text x="360" y="1045" class="body">Inputs: patient_name, address_mode,</text>
+  <text x="360" y="1065" class="body">therapist_gender</text>
+
+  <rect x="820" y="180" width="780" height="60" rx="14" ry="14" class="box-orange"/>
+  <text x="1210" y="215" text-anchor="middle" class="h1">TherapistEvaluator + EvaluatorPrompts</text>
+  <text x="1210" y="235" text-anchor="middle" class="small">Hidden analytics layer, no direct user-facing reply</text>
+
+  <rect x="820" y="260" width="240" height="140" rx="14" ry="14" class="box-orange"/>
+  <text x="840" y="290" class="h2">EVALUATOR_SYSTEM</text>
+  <text x="840" y="320" class="body">Shared system prompt:</text>
+  <text x="840" y="342" class="body">"You are a professional</text>
+  <text x="840" y="362" class="body">psychological counselor."</text>
+
+  <rect x="1080" y="260" width="250" height="180" rx="14" ry="14" class="box-orange"/>
+  <text x="1100" y="290" class="h2">EMOTION_ASSESSMENT</text>
+  <text x="1100" y="320" class="body">Method: assess_emotion()</text>
+  <text x="1100" y="345" class="body">Purpose: detect primary_emotion</text>
+  <text x="1100" y="365" class="body">and emotional_intensity,</text>
+  <text x="1100" y="385" class="body">including masked emotions.</text>
+  <text x="1100" y="420" class="body">Output: JSON {primary_emotion,</text>
+  <text x="1100" y="440" class="body">emotional_intensity}</text>
+
+  <rect x="1350" y="260" width="250" height="180" rx="14" ry="14" class="box-orange"/>
+  <text x="1370" y="290" class="h2">CLIENT_REACTION</text>
+  <text x="1370" y="320" class="body">Method: evaluate_client_reaction()</text>
+  <text x="1370" y="345" class="body">Purpose: detect resistance</text>
+  <text x="1370" y="365" class="body">or topic deviation.</text>
+  <text x="1370" y="400" class="body">Output: Boolean True / False</text>
+
+  <rect x="820" y="460" width="250" height="230" rx="14" ry="14" class="box-orange"/>
+  <text x="840" y="490" class="h2">get_strategy_prompt(...)</text>
+  <text x="840" y="520" class="body">Method: update_response_strategy()</text>
+  <text x="840" y="545" class="body">Purpose: choose response strategy</text>
+  <text x="840" y="565" class="body">and strategy_text.</text>
+  <text x="840" y="600" class="body">Inputs: patient_input, emotion,</text>
+  <text x="840" y="620" class="body">is_rejecting, strategy memory</text>
+  <text x="840" y="655" class="body">Output: JSON {strategy, strategy_text}</text>
+
+  <rect x="1080" y="460" width="250" height="180" rx="14" ry="14" class="box-orange"/>
+  <text x="1100" y="490" class="h2">SESSION_END</text>
+  <text x="1100" y="520" class="body">Method: should_end_session()</text>
+  <text x="1100" y="545" class="body">Purpose: detect explicit wish</text>
+  <text x="1100" y="565" class="body">to end the dialogue.</text>
+  <text x="1100" y="600" class="body">Output: Boolean True / False</text>
+
+  <rect x="1350" y="460" width="250" height="230" rx="14" ry="14" class="box-orange"/>
+  <text x="1370" y="490" class="h2">MEMORY_USAGE</text>
+  <text x="1370" y="520" class="body">Method: should_use_memory()</text>
+  <text x="1370" y="545" class="body">Purpose: decide whether</text>
+  <text x="1370" y="565" class="body">historical memory is needed.</text>
+  <text x="1370" y="600" class="body">Output: text summary</text>
+  <text x="1370" y="620" class="body">or "No need..."</text>
+
+  <rect x="820" y="715" width="250" height="200" rx="14" ry="14" class="box-orange"/>
+  <text x="840" y="745" class="h2">TREATMENT_STAGE</text>
+  <text x="840" y="775" class="body">Method: determine_treatment_stage()</text>
+  <text x="840" y="800" class="body">Purpose: narrative summary</text>
+  <text x="840" y="820" class="body">of current treatment stage.</text>
+  <text x="840" y="855" class="body">Output: short analytic paragraph</text>
+
+  <rect x="1080" y="715" width="250" height="180" rx="14" ry="14" class="box-orange"/>
+  <text x="1100" y="745" class="h2">INITIAL_THERAPY</text>
+  <text x="1100" y="775" class="body">Method: select_initial_therapy()</text>
+  <text x="1100" y="800" class="body">Purpose: choose initial</text>
+  <text x="1100" y="820" class="body">therapy type.</text>
+  <text x="1100" y="855" class="body">Output: therapy name string</text>
+
+  <rect x="1350" y="715" width="250" height="200" rx="14" ry="14" class="box-orange"/>
+  <text x="1370" y="745" class="h2">THERAPY_PROGRESS</text>
+  <text x="1370" y="775" class="body">Method: evaluate_therapy_progress()</text>
+  <text x="1370" y="800" class="body">Purpose: assess previous session</text>
+  <text x="1370" y="820" class="body">effect and optionally change</text>
+  <text x="1370" y="840" class="body">therapy type.</text>
+  <text x="1370" y="875" class="body">Output: JSON {new_therapy, reason}</text>
+
+  <rect x="1080" y="935" width="520" height="165" rx="14" ry="14" class="box-orange"/>
+  <text x="1100" y="965" class="h2">cross_session_evaluate()</text>
+  <text x="1100" y="995" class="body">Orchestrates therapy choice for a new session:</text>
+  <text x="1100" y="1017" class="body">- no previous sessions -> INITIAL_THERAPY</text>
+  <text x="1100" y="1037" class="body">- previous sessions exist -> THERAPY_PROGRESS</text>
+  <text x="1100" y="1070" class="body">Output: {new_therapy, reason}</text>
+
+  <rect x="1640" y="180" width="360" height="60" rx="14" ry="14" class="box-purple"/>
+  <text x="1820" y="215" text-anchor="middle" class="h1">TherapistAgent + TherapistPrompts</text>
+  <text x="1820" y="235" text-anchor="middle" class="small">Final user-facing response generation</text>
+
+  <rect x="1640" y="260" width="360" height="205" rx="14" ry="14" class="box-purple"/>
+  <text x="1660" y="290" class="h2">get_system_message()</text>
+  <text x="1660" y="320" class="body">Purpose: therapist persona,</text>
+  <text x="1660" y="340" class="body">therapeutic principles, styles,</text>
+  <text x="1660" y="360" class="body">address mode.</text>
+  <text x="1660" y="395" class="body">Inputs: therapist_name, gender,</text>
+  <text x="1660" y="415" class="body">styles, address_mode</text>
+
+  <rect x="1640" y="480" width="360" height="320" rx="14" ry="14" class="box-purple"/>
+  <text x="1660" y="510" class="h2">get_response_prompt()</text>
+  <text x="1660" y="540" class="body">Purpose: build final prompt</text>
+  <text x="1660" y="560" class="body">for therapy response generation.</text>
+  <text x="1660" y="595" class="body">Inputs: patient_input, memory_result,</text>
+  <text x="1660" y="615" class="body">emotion, current_therapy, current_stage,</text>
+  <text x="1660" y="635" class="body">strategy, session_memory, user profile,</text>
+  <text x="1660" y="655" class="body">therapist persona</text>
+  <text x="1660" y="690" class="body">Output: LLM prompt for final reply</text>
+  <text x="1660" y="710" class="body">(reply target &lt;= 60 words)</text>
+
+  <rect x="1640" y="815" width="360" height="150" rx="14" ry="14" class="box-purple"/>
+  <text x="1660" y="845" class="h2">Greeting / fallback templates</text>
+  <text x="1660" y="875" class="body">- get_first_session_greeting()</text>
+  <text x="1660" y="895" class="body">- get_return_session_greeting()</text>
+  <text x="1660" y="915" class="body">- get_fallback_response()</text>
+
+  <rect x="1640" y="980" width="360" height="185" rx="14" ry="14" class="box-purple"/>
+  <text x="1660" y="1010" class="h2">TherapistAgent runtime</text>
+  <text x="1660" y="1040" class="body">start_new_session(): clinical card,</text>
+  <text x="1660" y="1060" class="body">cross_session_evaluate(), therapy_type,</text>
+  <text x="1660" y="1080" class="body">greeting</text>
+  <text x="1660" y="1115" class="body">process_patient_input(): evaluator chain,</text>
+  <text x="1660" y="1135" class="body">final prompt, OpenRouterClient,</text>
+  <text x="1660" y="1155" class="body">therapist_response + session_ended</text>
+
+  <rect x="2040" y="180" width="260" height="60" rx="14" ry="14" class="box-gray"/>
+  <text x="2170" y="218" text-anchor="middle" class="h1">Storage / Observability</text>
+
+  <rect x="2040" y="260" width="260" height="130" rx="14" ry="14" class="box-gray"/>
+  <text x="2060" y="290" class="h2">Profile layer</text>
+  <text x="2060" y="320" class="body">- identity.accounts</text>
+  <text x="2060" y="340" class="body">- profile.user_profiles</text>
+  <text x="2060" y="360" class="body">- profile.therapist_preferences</text>
+
+  <rect x="2040" y="405" width="260" height="170" rx="14" ry="14" class="box-gray"/>
+  <text x="2060" y="435" class="h2">Clinical / session layer</text>
+  <text x="2060" y="465" class="body">- clinical.clinical_profiles</text>
+  <text x="2060" y="485" class="body">- therapy.therapy_sessions</text>
+  <text x="2060" y="505" class="body">- therapy.intake_states</text>
+  <text x="2060" y="525" class="body">- therapy.messages</text>
+
+  <rect x="2040" y="590" width="260" height="150" rx="14" ry="14" class="box-gray"/>
+  <text x="2060" y="620" class="h2">Audit / observability</text>
+  <text x="2060" y="650" class="body">- therapy.decision_logs</text>
+  <text x="2060" y="670" class="body">- observability.agent_logs</text>
+  <text x="2060" y="690" class="body">- Langfuse traces</text>
+
+  <rect x="20" y="1230" width="1110" height="95" rx="14" ry="14" class="box-orange"/>
+  <text x="40" y="1260" class="h2">New session flow</text>
+  <text x="40" y="1288" class="body">DialogueService -> SessionState -> TherapistAgent.start_new_session() -> TherapistEvaluator.cross_session_evaluate()</text>
+  <text x="40" y="1308" class="body">-> INITIAL_THERAPY / THERAPY_PROGRESS -> therapy_type -> greeting</text>
+
+  <rect x="20" y="1345" width="1110" height="105" rx="14" ry="14" class="box-green"/>
+  <text x="40" y="1375" class="h2">Intake flow</text>
+  <text x="40" y="1403" class="body">DialogueService.process_message() -> IntakeAgent.process_patient_input() -> get_system_message + get_intake_turn_prompt</text>
+  <text x="40" y="1423" class="body">-> LLM -> JSON card updates -> clinical profile update -> intake completion? -> switch flow_phase to therapy</text>
+
+  <rect x="20" y="1470" width="2280" height="120" rx="14" ry="14" class="box-purple"/>
+  <text x="40" y="1500" class="h2">Therapy flow</text>
+  <text x="40" y="1528" class="body">DialogueService.process_message() -> save patient message -> TherapistAgent.process_patient_input() -> evaluator chain:</text>
+  <text x="40" y="1548" class="body">SESSION_END + CLIENT_REACTION + EMOTION_ASSESSMENT + MEMORY_USAGE + TREATMENT_STAGE + get_strategy_prompt()</text>
+  <text x="40" y="1568" class="body">-> TherapistPrompts.get_system_message + get_response_prompt -> LLM -> therapist_response -> decision_logs / agent_logs</text>
+
+  <path d="M300 300 L340 300" class="arrow-blue"/>
+  <text x="308" y="292" class="small">build SessionState</text>
+
+  <path d="M300 520 L340 520" class="arrow-green"/>
+  <text x="304" y="512" class="small">flow_phase = intake</text>
+
+  <path d="M300 1080 L1640 1080" class="arrow-purple"/>
+  <text x="920" y="1070" class="small">flow_phase = therapy</text>
+
+  <path d="M770 610 L2040 490" class="arrow-green"/>
+  <text x="1180" y="560" class="small">card updates / completion state</text>
+
+  <path d="M2040 320 L300 320" class="arrow-gray"/>
+  <text x="1050" y="310" class="small">profile + prefs + history</text>
+
+  <path d="M2000 1030 L1600 1030 L1600 350 L1330 350" class="arrow-orange"/>
+  <text x="1510" y="340" class="small">analytics before final response</text>
+
+  <path d="M1070 575 L1640 575" class="arrow-orange"/>
+  <text x="1260" y="565" class="small">strategy / strategy_text</text>
+
+  <path d="M1330 350 L1640 600" class="arrow-orange"/>
+  <text x="1445" y="430" class="small">emotion -> style / tone</text>
+
+  <path d="M1600 575 L1640 620" class="arrow-orange"/>
+  <path d="M1070 815 L1640 650" class="arrow-orange"/>
+  <text x="1250" y="735" class="small">current_stage</text>
+
+  <path d="M1600 1030 L2040 650" class="arrow-gray"/>
+  <text x="1780" y="820" class="small">decision snapshot + LLM logs</text>
+
+  <path d="M1340 1015 L2040 520" class="arrow-gray"/>
+  <text x="1660" y="930" class="small">therapy_type / reason</text>
+</svg>

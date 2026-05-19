@@ -26,10 +26,7 @@ from db.repositories import (
 # Import shared dispatcher from bot to avoid creating separate instance
 from integrations.telegram.bot import dispatcher
 
-# Type hint import for dialogue service
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from services.dialogue_service import DialogueService
+from services.dialogue_service import DialogueService
 
 logger = get_logger(LogContexts.TELEGRAM)
 
@@ -469,7 +466,6 @@ async def _complete_prescreening(
     try:
         # Get dialogue_service from dispatcher context
         from typing import cast
-        from services.dialogue_service import DialogueService
         dialogue_service = cast(DialogueService | None, dispatcher.get("dialogue_service"))
         if dialogue_service:
             session_created = await dialogue_service.create_session_silent(

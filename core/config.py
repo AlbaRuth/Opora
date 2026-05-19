@@ -102,14 +102,6 @@ class Settings(BaseSettings):
     )
     intake_max_question_words: int = Field(default=35, alias="INTAKE_MAX_QUESTION_WORDS")
     intake_summary_max_words: int = Field(default=180, alias="INTAKE_SUMMARY_MAX_WORDS")
-    intake_background_update_enabled: bool = Field(
-        default=True,
-        alias="INTAKE_BACKGROUND_UPDATE_ENABLED",
-    )
-    intake_background_update_every_user_turns: int = Field(
-        default=4,
-        alias="INTAKE_BACKGROUND_UPDATE_EVERY_USER_TURNS",
-    )
     # NEW: Context window and max turns multipliers
     intake_context_window_multiplier: int = Field(
         default=2,

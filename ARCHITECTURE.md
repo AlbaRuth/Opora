@@ -390,7 +390,6 @@ services:
 - `INTAKE_ENABLED` — глобальный feature-flag стадии intake
 - `INTAKE_MIN_USER_TURNS` — минимальное число реплик пациента перед завершением intake
 - `INTAKE_REQUIRED_FIELDS` — обязательные поля карточки
-- `INTAKE_BACKGROUND_UPDATE_ENABLED` / `INTAKE_BACKGROUND_UPDATE_EVERY_USER_TURNS` — фоновое обновление карточки в режиме therapy
 - `LLM_INTAKE_*` — отдельные параметры LLM для intake-агента
 
 ### Релиз и откат

@@ -53,31 +53,36 @@ services:
           cpus: '0.5'
           memory: 256M
 
-  # Opora Bot (опционально — можно запускать и без Docker)
-  # Раскомментируйте для запуска бота в контейнере
-  # bot:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   container_name: opora-bot
-  #   restart: unless-stopped
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     # Переопределяем DATABASE_URL для использования postgres сервиса
-  #     DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-opora}:${POSTGRES_PASSWORD:-opora}@postgres:5432/${POSTGRES_DB:-opora}
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   networks:
-  #     - opora-network
-  #   volumes:
-  #     - ./logs:/app/logs
-  #     - ./.env:/app/.env:ro
-  #     - ./alembic:/app/alembic:ro
-  #   # Выполняем миграции перед запуском бота
-  #   command: >
-  #     sh -c "alembic upgrade head && python bot_runner.py"
+  # Opora Bot (запускается в Docker для работы с postgres в одной сети)
+  bot:
+    image: python:3.11-slim
+    container_name: opora-bot
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      # DATABASE_URL для подключения к postgres внутри Docker сети
+      DATABASE_URL: postgresql+asyncpg://opora:opora@postgres:5432/OporaAssistant
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      LOG_FILE_ENABLED: "true"
+      LOG_FILE_PATH: logs/app.log
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      LANGFUSE_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - opora-network
+    volumes:
+      - .:/app:cached
+      - /app/.venv
+    command: >
+      sh -c "
+        pip install -e . -q 2>/dev/null || pip install -r requirements.txt -q 2>/dev/null &&
+        alembic upgrade head &&
+        python bot_runner.py
+      "
 
 volumes:
   opora_postgres_data:
