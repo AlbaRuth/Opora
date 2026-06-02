@@ -16,7 +16,7 @@ from monitoring.api.schemas import (
     SandboxSessionResponse,
     SandboxTurnResponse,
 )
-from monitoring.sandbox.domain import SandboxSessionSpec
+from monitoring.sandbox.domain import PrescreeningProfile, SandboxSessionSpec
 from monitoring.sandbox.runner import SandboxRunner
 
 router = APIRouter(
@@ -39,6 +39,16 @@ async def create_sandbox_session(
         SandboxSessionSpec(
             name=request.name,
             patient_template_id=request.patient_template_id,
+            start_phase=request.start_phase,
+            prescreening_mode=request.prescreening_mode,
+            manual_prescreening_profile=(
+                PrescreeningProfile(**request.manual_prescreening_profile.model_dump())
+                if request.manual_prescreening_profile
+                else None
+            ),
+            ai_prescreening_seed=request.ai_prescreening_seed,
+            scenario_seed=request.scenario_seed,
+            patient_persona_source=request.patient_persona_source,
             patient_name=request.patient_name,
             patient_age=request.patient_age,
             patient_sex=request.patient_sex,
@@ -46,11 +56,16 @@ async def create_sandbox_session(
             model_overrides=request.model_overrides,
         )
     )
+    metadata = run.run_metadata or {}
     return SandboxSessionResponse(
         run_id=run.id,
         account_id=run.account_id,
         session_id=run.session_id,
         status=run.status,
+        start_phase=metadata.get("start_phase"),
+        prescreening_mode=metadata.get("prescreening_mode"),
+        generated_prescreening_profile=metadata.get("generated_prescreening_profile"),
+        generated_scenario=metadata.get("generated_scenario"),
         effective_model_config=run.model_config,
     )
 
@@ -119,6 +134,10 @@ async def stop_sandbox_session(
         account_id=run.account_id,
         session_id=run.session_id,
         status=run.status,
+        start_phase=(run.run_metadata or {}).get("start_phase"),
+        prescreening_mode=(run.run_metadata or {}).get("prescreening_mode"),
+        generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
+        generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
         effective_model_config=run.model_config,
     )
 
@@ -167,6 +186,10 @@ async def get_sandbox_session(
         account_id=run.account_id,
         session_id=run.session_id,
         status=run.status,
+        start_phase=(run.run_metadata or {}).get("start_phase"),
+        prescreening_mode=(run.run_metadata or {}).get("prescreening_mode"),
+        generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
+        generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
         effective_model_config=run.model_config,
     )
 

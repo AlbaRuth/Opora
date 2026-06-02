@@ -16,6 +16,9 @@ def test_auto_patient_prompt_keeps_model_in_patient_role():
 
     messages = build_auto_patient_messages(
         template=template,
+        start_phase="intake",
+        prescreening_profile={"patient_name": "Иван"},
+        generated_scenario={"presenting_problem": "Панические приступы перед работой"},
         conversation=[
             {"role": "assistant", "content": "Что вы чувствуете утром?"},
             {"role": "user", "content": "Мне тревожно."},
@@ -23,8 +26,8 @@ def test_auto_patient_prompt_keeps_model_in_patient_role():
     )
 
     assert messages[0]["role"] == "system"
-    assert "Не выступай психологом" in messages[0]["content"]
-    assert "Отвечай только как пациент" in messages[0]["content"]
+    assert "You simulate a living patient" in messages[0]["content"]
+    assert "Write only the next patient message" in messages[0]["content"]
     assert "Панические приступы перед работой" in messages[0]["content"]
     assert messages[-1]["role"] == "user"
-    assert "Следующая реплика пациента" in messages[-1]["content"]
+    assert "Write the next patient message only" in messages[-1]["content"]

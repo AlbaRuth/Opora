@@ -13,6 +13,7 @@ import type {
   MessageItem,
   ModelOverrides,
   PatientTemplate,
+  SandboxPrescreeningProfile,
   SandboxSessionResponse,
   SandboxTurnResponse,
   TraceDetail,
@@ -28,6 +29,20 @@ function App() {
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null);
   const [templates, setTemplates] = useState<PatientTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | undefined>();
+  const [sandboxStartPhase, setSandboxStartPhase] = useState<'prescreening' | 'intake' | 'therapy'>('intake');
+  const [prescreeningMode, setPrescreeningMode] = useState<'manual' | 'ai_generated'>('manual');
+  const [aiPrescreeningSeed, setAiPrescreeningSeed] = useState('');
+  const [scenarioSeed, setScenarioSeed] = useState('');
+  const [autoRunTurns, setAutoRunTurns] = useState(3);
+  const [manualProfile, setManualProfile] = useState<SandboxPrescreeningProfile>({
+    patient_name: 'Sandbox Пациент',
+    patient_age: 32,
+    patient_sex: 'prefer_not_to_say',
+    address_mode: 'formal',
+    therapist_name: 'Опора',
+    therapist_gender: 'female',
+    therapist_styles: ['friendly'],
+  });
   const [modelConfig, setModelConfig] = useState<EffectiveModelConfig | null>(null);
   const [selectedModelTask, setSelectedModelTask] = useState('therapist.generate_response');
   const [draftModelConfig, setDraftModelConfig] = useState<GenerationConfig | null>(null);
@@ -87,7 +102,17 @@ function App() {
     setSandboxBusy(true);
     setError(null);
     try {
-      const created = await api.createSandbox(selectedTemplateId ?? templates[0]?.id, currentOverrides());
+      const created = await api.createSandbox({
+        name: 'UI sandbox run',
+        patient_template_id: selectedTemplateId ?? templates[0]?.id,
+        start_phase: sandboxStartPhase,
+        prescreening_mode: prescreeningMode,
+        manual_prescreening_profile: prescreeningMode === 'manual' ? manualProfile : undefined,
+        ai_prescreening_seed: aiPrescreeningSeed,
+        scenario_seed: scenarioSeed,
+        patient_persona_source: 'generated',
+        model_overrides: currentOverrides(),
+      });
       setSandbox(created);
       setSandboxTurns([]);
       setSource('sandbox');
@@ -124,7 +149,7 @@ function App() {
     setSandboxBusy(true);
     setError(null);
     try {
-      const turns = await api.autoRun(sandbox.run_id, 3, currentOverrides());
+      const turns = await api.autoRun(sandbox.run_id, autoRunTurns, currentOverrides());
       setSandboxTurns((items) => [...items, ...turns]);
       await loadChats('sandbox');
     } catch (err) {
@@ -227,6 +252,12 @@ function App() {
         <SandboxConsole
           templates={templates}
           selectedTemplateId={selectedTemplateId}
+          startPhase={sandboxStartPhase}
+          prescreeningMode={prescreeningMode}
+          manualProfile={manualProfile}
+          aiPrescreeningSeed={aiPrescreeningSeed}
+          scenarioSeed={scenarioSeed}
+          autoRunTurns={autoRunTurns}
           sandbox={sandbox}
           sandboxMessage={sandboxMessage}
           sandboxTurns={sandboxTurns}
@@ -235,6 +266,12 @@ function App() {
           selectedModelTask={selectedModelTask}
           draftModelConfig={draftModelConfig}
           onTemplateChange={setSelectedTemplateId}
+          onStartPhaseChange={setSandboxStartPhase}
+          onPrescreeningModeChange={setPrescreeningMode}
+          onManualProfileChange={setManualProfile}
+          onAiPrescreeningSeedChange={setAiPrescreeningSeed}
+          onScenarioSeedChange={setScenarioSeed}
+          onAutoRunTurnsChange={setAutoRunTurns}
           onMessageChange={setSandboxMessage}
           onCreate={createSandbox}
           onSend={sendSandbox}

@@ -93,7 +93,33 @@ export type SandboxSessionResponse = {
   account_id: number;
   session_id: number;
   status: string;
+  start_phase?: 'prescreening' | 'intake' | 'therapy' | null;
+  prescreening_mode?: 'manual' | 'ai_generated' | null;
+  generated_prescreening_profile?: Record<string, unknown> | null;
+  generated_scenario?: Record<string, unknown> | null;
   effective_model_config?: EffectiveModelConfig | null;
+};
+
+export type SandboxPrescreeningProfile = {
+  patient_name: string;
+  patient_age?: number | null;
+  patient_sex: 'male' | 'female' | 'prefer_not_to_say';
+  address_mode: 'formal' | 'informal';
+  therapist_name: string;
+  therapist_gender: 'female' | 'male';
+  therapist_styles: string[];
+};
+
+export type SandboxCreatePayload = {
+  name: string;
+  patient_template_id?: number;
+  start_phase: 'prescreening' | 'intake' | 'therapy';
+  prescreening_mode: 'manual' | 'ai_generated';
+  manual_prescreening_profile?: SandboxPrescreeningProfile;
+  ai_prescreening_seed?: string;
+  scenario_seed?: string;
+  patient_persona_source: 'generated' | 'manual' | 'legacy_template';
+  model_overrides?: ModelOverrides;
 };
 
 export type SandboxTurnResponse = {

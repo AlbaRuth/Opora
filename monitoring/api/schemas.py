@@ -88,9 +88,25 @@ class TraceDetail(BaseModel):
 ModelOverrides = dict[str, dict[str, dict[str, Any]]]
 
 
+class SandboxPrescreeningProfileRequest(BaseModel):
+    patient_name: str = "Sandbox Пациент"
+    patient_age: int | None = Field(default=32, ge=13, le=120)
+    patient_sex: str = "prefer_not_to_say"
+    address_mode: str = "formal"
+    therapist_name: str = "Опора"
+    therapist_gender: str = "female"
+    therapist_styles: list[str] = Field(default_factory=lambda: ["friendly"])
+
+
 class SandboxSessionCreate(BaseModel):
     name: str = "Sandbox run"
     patient_template_id: int | None = None
+    start_phase: str = Field(default="intake", pattern="^(prescreening|intake|therapy)$")
+    prescreening_mode: str = Field(default="manual", pattern="^(manual|ai_generated)$")
+    manual_prescreening_profile: SandboxPrescreeningProfileRequest | None = None
+    ai_prescreening_seed: str = ""
+    scenario_seed: str = ""
+    patient_persona_source: str = Field(default="generated", pattern="^(generated|manual|legacy_template)$")
     patient_name: str = "Sandbox Пациент"
     patient_age: int | None = 32
     patient_sex: str = "prefer_not_to_say"
@@ -113,6 +129,10 @@ class SandboxSessionResponse(BaseModel):
     account_id: int
     session_id: int
     status: str
+    start_phase: str | None = None
+    prescreening_mode: str | None = None
+    generated_prescreening_profile: dict[str, Any] | None = None
+    generated_scenario: dict[str, Any] | None = None
     effective_model_config: dict[str, Any] | None = None
 
 

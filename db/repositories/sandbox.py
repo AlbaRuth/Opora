@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func
@@ -96,7 +96,7 @@ class SandboxRunRepository(BaseRepository[SandboxRun]):
         return await self.update(
             run,
             status="stopped",
-            stopped_at=datetime.now(UTC),
+            stopped_at=datetime.now(timezone.utc),
             stop_reason=reason,
         )
 

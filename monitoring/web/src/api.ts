@@ -4,6 +4,7 @@ import type {
   MessageItem,
   ModelOverrides,
   PatientTemplate,
+  SandboxCreatePayload,
   SandboxSessionResponse,
   SandboxTurnResponse,
   TraceDetail,
@@ -38,14 +39,10 @@ export const api = {
   modelConfig: () => request<EffectiveModelConfig>('/api/sandbox/model-config'),
   sandboxTurns: (runId: number) =>
     request<SandboxTurnResponse[]>(`/api/sandbox/sessions/${runId}/turns`),
-  createSandbox: (patientTemplateId?: number, modelOverrides?: ModelOverrides) =>
+  createSandbox: (payload: SandboxCreatePayload) =>
     request<SandboxSessionResponse>('/api/sandbox/sessions', {
       method: 'POST',
-      body: JSON.stringify({
-        name: 'UI sandbox run',
-        patient_template_id: patientTemplateId,
-        model_overrides: modelOverrides,
-      }),
+      body: JSON.stringify(payload),
     }),
   sendSandboxMessage: (runId: number, message: string, modelOverrides?: ModelOverrides) =>
     request<SandboxTurnResponse>(`/api/sandbox/sessions/${runId}/messages`, {

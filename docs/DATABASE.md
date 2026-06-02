@@ -167,3 +167,18 @@ Prompt/response хранятся с truncation flags в `metadata`; лимиты
 ```
 
 Исторические миграции не переписываются без отдельного решения о squash.
+# Sandbox Metadata Update
+
+`observability.sandbox_runs.metadata` stores non-production sandbox context:
+
+- `start_phase`: `prescreening`, `intake`, or `therapy`.
+- `prescreening_mode`: `manual` or `ai_generated`.
+- `manual_prescreening_profile`: profile supplied by UI/API.
+- `generated_prescreening_profile`: JSON returned by `sandbox_patient.prescreening_profile_generation`.
+- `effective_prescreening_profile`: profile actually written to profile tables.
+- `generated_scenario`: JSON returned by `sandbox_patient.scenario_generation`.
+- `prescreening_step` and `prescreening_completed`: sandbox prescreening wizard state.
+- `model_overrides`: scoped sandbox model overrides.
+
+`observability.patient_templates` is retained for legacy runs only. New generated patient
+flows use metadata-driven prescreening profile and scenario generation instead of templates.

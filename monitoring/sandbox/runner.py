@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+from dataclasses import asdict
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -15,13 +16,18 @@ from db.models import Account, SandboxRun, SandboxTurn
 from db.repositories import (
     AccountRepository,
     ConversationTraceRepository,
+    ClinicalProfileRepository,
+    IntakeStateRepository,
     PatientTemplateRepository,
     SandboxRunRepository,
     SandboxTurnRepository,
+    SessionRepository,
+    TherapistPreferenceRepository,
+    UserProfileRepository,
 )
 from db.session import get_db_session
 from monitoring.sandbox.auto_patient import AutoPatient
-from monitoring.sandbox.domain import SandboxSessionSpec
+from monitoring.sandbox.domain import PrescreeningProfile, SandboxSessionSpec
 from observability.tracing import TraceContext, trace_scope
 from services.dialogue_service import DialogueService
 from services.session_lifecycle import create_or_replace_active_session
@@ -47,34 +53,50 @@ class SandboxRunner:
             template_repo = PatientTemplateRepository(session)
             run_repo = SandboxRunRepository(session)
 
-            template = (
-                await template_repo.get_by_id(request.patient_template_id)
-                if request.patient_template_id
-                else await template_repo.ensure_default()
-            )
+            template = None
+            if request.patient_persona_source == "legacy_template":
+                template = (
+                    await template_repo.get_by_id(request.patient_template_id)
+                    if request.patient_template_id
+                    else await template_repo.ensure_default()
+                )
+            profile, generated_profile = await self._resolve_prescreening_profile(request)
+            generated_scenario = await self._resolve_scenario(request, profile)
             account = await account_repo.create_from_telegram(
                 telegram_id=telegram_id,
                 username=f"sandbox_{telegram_id}",
-                first_name=request.patient_name,
+                first_name=profile.patient_name,
                 language_code="ru",
                 origin=CHANNEL_SANDBOX,
             )
-            if account.user_profile:
-                account.user_profile.display_name = request.patient_name
-                account.user_profile.age = request.patient_age
-                account.user_profile.sex = request.patient_sex
-                account.user_profile.address_mode = request.address_mode
-                account.user_profile.profile_completed_at = datetime.now(UTC)
-            if account.therapist_preference:
-                account.therapist_preference.prescreening_completed_at = datetime.now(UTC)
-            if account.clinical_profile and template:
-                account.clinical_profile.current_problems = template.presenting_problem
+            await self._apply_prescreening_profile(
+                session=session,
+                account_id=account.id,
+                profile=profile,
+                mark_complete=request.start_phase != "prescreening",
+            )
+            if account.clinical_profile and request.start_phase == "therapy":
+                if generated_scenario:
+                    account.clinical_profile.mental_health_history = generated_scenario.mental_health_history
+                    account.clinical_profile.physical_health_history = generated_scenario.physical_health_history
+                    account.clinical_profile.current_problems = generated_scenario.current_problems
+                    account.clinical_profile.intake_hypothesis = generated_scenario.intake_hypothesis
+                    account.clinical_profile.intake_hypothesis_explanation = (
+                        generated_scenario.intake_hypothesis_explanation
+                    )
+                elif template:
+                    account.clinical_profile.current_problems = template.presenting_problem
 
             created = await create_or_replace_active_session(
                 account_id=account.id,
-                intake_enabled=self.settings.intake_enabled,
+                intake_enabled=(request.start_phase != "therapy" and self.settings.intake_enabled),
                 session=session,
             )
+            if request.start_phase == "prescreening":
+                intake_repo = IntakeStateRepository(session)
+                intake_state = await intake_repo.get_by_session_id(created.session_id)
+                if intake_state:
+                    intake_state.flow_phase = "prescreening"
             return await run_repo.create_run(
                 account_id=account.id,
                 session_id=created.session_id,
@@ -86,8 +108,96 @@ class SandboxRunner:
                 metadata={
                     "channel": "sandbox",
                     "model_overrides": request.model_overrides,
+                    "start_phase": request.start_phase,
+                    "prescreening_mode": request.prescreening_mode,
+                    "manual_prescreening_profile": (
+                        asdict(request.manual_prescreening_profile)
+                        if request.manual_prescreening_profile
+                        else None
+                    ),
+                    "generated_prescreening_profile": (
+                        generated_profile.model_dump() if generated_profile else None
+                    ),
+                    "effective_prescreening_profile": asdict(profile),
+                    "generated_scenario": (
+                        generated_scenario.model_dump() if generated_scenario else None
+                    ),
+                    "scenario_seed": request.scenario_seed,
+                    "ai_prescreening_seed": request.ai_prescreening_seed,
+                    "patient_persona_source": request.patient_persona_source,
+                    "prescreening_step": "therapist_name",
                 },
             )
+
+    async def _resolve_prescreening_profile(
+        self,
+        request: SandboxSessionSpec,
+    ) -> tuple[PrescreeningProfile, object | None]:
+        if request.prescreening_mode == "ai_generated":
+            generated = await self.auto_patient.generate_prescreening_profile(
+                seed=request.ai_prescreening_seed,
+            )
+            return (
+                PrescreeningProfile(
+                    patient_name=generated.patient_name,
+                    patient_age=generated.patient_age,
+                    patient_sex=generated.patient_sex,
+                    address_mode=generated.address_mode,
+                    therapist_name=generated.therapist_name,
+                    therapist_gender=generated.therapist_gender,
+                    therapist_styles=generated.therapist_styles,
+                ),
+                generated,
+            )
+        if request.manual_prescreening_profile:
+            return request.manual_prescreening_profile, None
+        return (
+            PrescreeningProfile(
+                patient_name=request.patient_name,
+                patient_age=request.patient_age,
+                patient_sex=request.patient_sex,
+                address_mode=request.address_mode,
+            ),
+            None,
+        )
+
+    async def _resolve_scenario(
+        self,
+        request: SandboxSessionSpec,
+        profile: PrescreeningProfile,
+    ):
+        if request.patient_persona_source == "legacy_template":
+            return None
+        return await self.auto_patient.generate_scenario(
+            seed=request.scenario_seed or request.ai_prescreening_seed,
+            prescreening_profile=profile,
+        )
+
+    @staticmethod
+    async def _apply_prescreening_profile(
+        *,
+        session,
+        account_id: int,
+        profile: PrescreeningProfile,
+        mark_complete: bool,
+    ) -> None:
+        therapist_repo = TherapistPreferenceRepository(session)
+        user_profile_repo = UserProfileRepository(session)
+        await therapist_repo.update_preferences(
+            account_id=account_id,
+            therapist_name=profile.therapist_name,
+            therapist_gender=profile.therapist_gender,
+            therapist_styles=profile.therapist_styles,
+            mark_complete=mark_complete,
+        )
+        await user_profile_repo.update_profile(
+            account_id=account_id,
+            display_name=profile.patient_name,
+            age=profile.patient_age,
+            sex=profile.patient_sex,
+            address_mode=profile.address_mode,
+            mark_complete=mark_complete,
+        )
 
     async def send_message(
         self,
@@ -96,6 +206,12 @@ class SandboxRunner:
         model_overrides: dict | None = None,
     ) -> SandboxTurn:
         run, account = await self._load_run_account(run_id)
+        run_metadata = run.run_metadata or {}
+        if (
+            run_metadata.get("start_phase") == "prescreening"
+            and not run_metadata.get("prescreening_completed")
+        ):
+            return await self._send_prescreening_message(run, message, model_overrides)
         overrides = self._merge_overrides(run, model_overrides)
         started = time.perf_counter()
         with llm_overrides_scope(overrides):
@@ -124,6 +240,73 @@ class SandboxRunner:
                 },
             )
 
+    async def _send_prescreening_message(
+        self,
+        run: SandboxRun,
+        message: str,
+        model_overrides: dict | None,
+    ) -> SandboxTurn:
+        started = time.perf_counter()
+        metadata = dict(run.run_metadata or {})
+        step = metadata.get("prescreening_step") or "therapist_name"
+        next_step_by_step = {
+            "therapist_name": "therapist_gender",
+            "therapist_gender": "patient_name",
+            "patient_name": "patient_age",
+            "patient_age": "patient_sex",
+            "patient_sex": "address_mode",
+            "address_mode": "styles",
+            "styles": "completed",
+        }
+        next_step = next_step_by_step.get(step, "completed")
+        if next_step == "completed":
+            profile = self._profile_from_metadata(metadata)
+            async with get_db_session() as session:
+                await self._apply_prescreening_profile(
+                    session=session,
+                    account_id=run.account_id,
+                    profile=profile,
+                    mark_complete=True,
+                )
+                intake_repo = IntakeStateRepository(session)
+                intake_state = await intake_repo.get_by_session_id(run.session_id)
+                if intake_state:
+                    intake_state.flow_phase = "intake"
+                db_run = await SandboxRunRepository(session).get_by_id(run.id)
+                if db_run:
+                    next_metadata = dict(db_run.run_metadata or {})
+                    next_metadata["prescreening_step"] = "completed"
+                    next_metadata["prescreening_completed"] = True
+                    db_run.run_metadata = next_metadata
+            assistant_message = (
+                "Prescreening completed in sandbox. The next patient message will enter intake."
+            )
+        else:
+            async with get_db_session() as session:
+                db_run = await SandboxRunRepository(session).get_by_id(run.id)
+                if db_run:
+                    next_metadata = dict(db_run.run_metadata or {})
+                    next_metadata["prescreening_step"] = next_step
+                    db_run.run_metadata = next_metadata
+            assistant_message = self._prescreening_prompt_for_step(next_step)
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        async with get_db_session() as session:
+            turn_repo = SandboxTurnRepository(session)
+            return await turn_repo.create_turn(
+                run_id=run.id,
+                trace_id=None,
+                patient_message=message,
+                assistant_message=assistant_message,
+                latency_ms=latency_ms,
+                metadata={
+                    "flow_phase": "prescreening",
+                    "prescreening_step_before": step,
+                    "prescreening_step_after": next_step,
+                    "model_overrides": model_overrides,
+                },
+            )
+
     async def auto_run(
         self,
         run_id: int,
@@ -134,7 +317,8 @@ class SandboxRunner:
         overrides = self._merge_overrides(run, model_overrides)
         template = await self._load_template(run)
         turns: list[SandboxTurn] = []
-        for _ in range(min(max_turns, template.max_turns)):
+        configured_max_turns = template.max_turns if template else self.llm_config_resolver.config.sandbox.max_auto_run_turns
+        for _ in range(min(max_turns, configured_max_turns)):
             conversation = await self._conversation_for_run(run.id)
             generated = await self._generate_auto_patient_message(
                 run=run,
@@ -159,6 +343,36 @@ class SandboxRunner:
         async with get_db_session() as session:
             repo = SandboxRunRepository(session)
             return await repo.stop(run_id, reason)
+
+    @staticmethod
+    def _profile_from_metadata(metadata: dict) -> PrescreeningProfile:
+        raw = (
+            metadata.get("effective_prescreening_profile")
+            or metadata.get("manual_prescreening_profile")
+            or metadata.get("generated_prescreening_profile")
+            or {}
+        )
+        return PrescreeningProfile(
+            patient_name=raw.get("patient_name") or "Sandbox Пациент",
+            patient_age=raw.get("patient_age"),
+            patient_sex=raw.get("patient_sex") or "prefer_not_to_say",
+            address_mode=raw.get("address_mode") or "formal",
+            therapist_name=raw.get("therapist_name") or "Опора",
+            therapist_gender=raw.get("therapist_gender") or "female",
+            therapist_styles=raw.get("therapist_styles") or ["friendly"],
+        )
+
+    @staticmethod
+    def _prescreening_prompt_for_step(step: str) -> str:
+        prompts = {
+            "therapist_gender": "Sandbox prescreening: choose counselor gender.",
+            "patient_name": "Sandbox prescreening: provide patient name or pseudonym.",
+            "patient_age": "Sandbox prescreening: provide patient age.",
+            "patient_sex": "Sandbox prescreening: choose patient sex.",
+            "address_mode": "Sandbox prescreening: choose formal or informal address.",
+            "styles": "Sandbox prescreening: choose counselor communication styles.",
+        }
+        return prompts.get(step, "Sandbox prescreening: continue.")
 
     async def _load_run_account(self, run_id: int) -> tuple[SandboxRun, Account]:
         async with get_db_session() as session:
@@ -190,6 +404,14 @@ class SandboxRunner:
                 return await self.auto_patient.next_message(
                     template=template,
                     conversation=conversation,
+                    start_phase=(run.run_metadata or {}).get("start_phase", "intake"),
+                    prescreening_profile=(run.run_metadata or {}).get(
+                        "effective_prescreening_profile",
+                        {},
+                    ),
+                    clinical_card=await self._clinical_card_for_account(account.id),
+                    generated_scenario=(run.run_metadata or {}).get("generated_scenario", {}),
+                    test_goal=(run.run_metadata or {}).get("scenario_seed", ""),
                     account_id=account.id,
                     session_id=run.session_id,
                 )
@@ -198,7 +420,7 @@ class SandboxRunner:
                 error_message = str(exc)
                 raise
             finally:
-                finished_at = datetime.now(UTC)
+                finished_at = datetime.now(timezone.utc)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 async with get_db_session() as session:
                     trace_repo = ConversationTraceRepository(session)
@@ -211,16 +433,17 @@ class SandboxRunner:
                     )
 
     async def _load_template(self, run: SandboxRun):
+        if not run.patient_template_id:
+            return None
         async with get_db_session() as session:
             repo = PatientTemplateRepository(session)
-            template = (
-                await repo.get_by_id(run.patient_template_id)
-                if run.patient_template_id
-                else await repo.ensure_default()
-            )
-            if not template:
-                template = await repo.ensure_default()
-            return repo.to_dataclass(template)
+            template = await repo.get_by_id(run.patient_template_id)
+            return repo.to_dataclass(template) if template else None
+
+    async def _clinical_card_for_account(self, account_id: int) -> dict:
+        async with get_db_session() as session:
+            card = await ClinicalProfileRepository(session).get_patient_record(account_id)
+            return card or {}
 
     async def _conversation_for_run(self, run_id: int) -> list[dict[str, str]]:
         async with get_db_session() as session:

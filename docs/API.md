@@ -351,3 +351,47 @@ PHASE_PRESCREENING = "prescreening"
 PHASE_INTAKE = "intake"
 PHASE_THERAPY = "therapy"
 ```
+# Sandbox API Update
+
+`POST /api/sandbox/sessions` accepts:
+
+```json
+{
+  "name": "UI sandbox run",
+  "start_phase": "prescreening",
+  "prescreening_mode": "ai_generated",
+  "manual_prescreening_profile": {
+    "patient_name": "Мария",
+    "patient_age": 29,
+    "patient_sex": "female",
+    "address_mode": "formal",
+    "therapist_name": "Опора",
+    "therapist_gender": "female",
+    "therapist_styles": ["friendly", "soft"]
+  },
+  "ai_prescreening_seed": "Проверить тревожного пациента на этапе анкеты",
+  "scenario_seed": "Рабочее выгорание и страх оценки",
+  "patient_persona_source": "generated",
+  "model_overrides": {}
+}
+```
+
+Response includes:
+
+```json
+{
+  "run_id": 1,
+  "account_id": 10,
+  "session_id": 20,
+  "status": "active",
+  "start_phase": "prescreening",
+  "prescreening_mode": "ai_generated",
+  "generated_prescreening_profile": {},
+  "generated_scenario": {},
+  "effective_model_config": {}
+}
+```
+
+Allowed `start_phase` values: `prescreening`, `intake`, `therapy`.
+Allowed `prescreening_mode` values: `manual`, `ai_generated`.
+Allowed `patient_persona_source` values: `generated`, `manual`, `legacy_template`.
