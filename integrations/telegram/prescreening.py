@@ -1,176 +1,340 @@
-"""
-Prescreening flow for new users.
-Multi-step wizard with inline keyboards for therapist personalization.
-NEW: Includes patient sex (male/female/prefer_not_to_say) and address mode (ты/вы).
-"""
+"""Prescreening flow handlers."""
+
+# from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import ClassVar
+from datetime import datetime
 
 from aiogram import F, types
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core.config import get_settings
-from core.intake_user_copy import build_intake_start_message
-from core.logging import get_logger, LogContexts
-from db.session import get_db_session
+from core.intake_user_copy import build_intake_start_message, build_welcome_back_message
+from core.logging import LogContexts, get_logger
+from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME
 from db.repositories import (
     AccountRepository,
+    ClinicalProfileRepository,
     TherapistPreferenceRepository,
     UserProfileRepository,
 )
-
-# Import shared dispatcher from bot to avoid creating separate instance
+from db.session import get_db_session
 from integrations.telegram.bot import dispatcher
-
+from integrations.telegram.prescreening_flow import build_completion_profile_lines, migrate_traits_to_styles
+from integrations.telegram.prescreening_keyboards import (
+    build_address_mode_keyboard,
+    build_gender_keyboard,
+    build_patient_sex_keyboard,
+    build_skip_keyboard,
+    build_styles_keyboard,
+)
+from integrations.telegram.prescreening_state import (
+    PrescreeningWizardState,
+    clear_wizard_state,
+    get_wizard_state,
+    is_in_prescreening as state_is_in_prescreening,
+    save_wizard_state,
+)
 from services.dialogue_service import DialogueService
+from services.prescreening_gate import evaluate_prescreening_gate
 
 logger = get_logger(LogContexts.TELEGRAM)
-
-# Latency budget threshold in seconds for non-LLM operations
 LATENCY_BUDGET_MS = 500
 
-# Available communication styles (NEW: 4 distinct styles)
-THERAPIST_STYLES = [
-    ("friendly", "Дружелюбный"),
-    ("soft", "Мягкий"),
-    ("business", "Деловой"),
-    ("motivating", "Мотивирующий"),
-]
 
-DEFAULT_THERAPIST_NAME = "Опора"
-DEFAULT_THERAPIST_GENDER = "female"
+async def _persist_and_send(state: PrescreeningWizardState, message: types.Message, text: str, markup=None) -> None:
+    await save_wizard_state(state)
+    await message.answer(text, reply_markup=markup)
 
 
-@dataclass
-class PrescreeningState:
-    """Temporary state for prescreening flow."""
-
-    step: str = "awaiting_therapist_name"
-    therapist_name: str = DEFAULT_THERAPIST_NAME
-    therapist_gender: str = DEFAULT_THERAPIST_GENDER
-    patient_name: str = ""
-    patient_age: int | None = None
-    # NEW: Patient sex (male/female/prefer_not_to_say)
-    patient_sex: str = "prefer_not_to_say"
-    # NEW: Address mode (formal=вы, informal=ты)
-    address_mode: str = "formal"
-    # NEW: Communication styles (4 distinct styles, can select multiple)
-    selected_styles: list[str] = field(default_factory=list)
-
-
-# In-memory storage for prescreening states (user_id -> state)
-# In production, consider using Redis or database
-_prescreening_states: dict[int, PrescreeningState] = {}
-
-
-def get_prescreening_state(user_id: int) -> PrescreeningState | None:
-    """Get current prescreening state for user."""
-    return _prescreening_states.get(user_id)
-
-
-def set_prescreening_state(user_id: int, state: PrescreeningState) -> None:
-    """Set prescreening state for user."""
-    _prescreening_states[user_id] = state
-
-
-def clear_prescreening_state(user_id: int) -> None:
-    """Clear prescreening state for user."""
-    _prescreening_states.pop(user_id, None)
-
-
-def is_in_prescreening(user_id: int) -> bool:
-    """Check if user is currently in prescreening flow."""
-    return user_id in _prescreening_states
-
-
-def build_skip_keyboard() -> InlineKeyboardMarkup:
-    """Build keyboard with Skip button."""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="Пропустить", callback_data="prescreen:skip_name"))
-    return builder.as_markup()
-
-
-def build_gender_keyboard() -> InlineKeyboardMarkup:
-    """Build keyboard for therapist gender selection."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="Мужской", callback_data="prescreen:gender:male"),
-        InlineKeyboardButton(text="Женский", callback_data="prescreen:gender:female"),
-    )
-    return builder.as_markup()
-
-
-def build_patient_sex_keyboard() -> InlineKeyboardMarkup:
-    """Build keyboard for patient sex selection."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="Мужской", callback_data="prescreen:sex:male"),
-        InlineKeyboardButton(text="Женский", callback_data="prescreen:sex:female"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="Не хочу указывать", callback_data="prescreen:sex:prefer_not_to_say"),
-    )
-    return builder.as_markup()
-
-
-def build_address_mode_keyboard() -> InlineKeyboardMarkup:
-    """Build keyboard for address mode selection (ты/вы)."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text='На «Вы»', callback_data="prescreen:address:formal"),
-        InlineKeyboardButton(text='На «Ты»', callback_data="prescreen:address:informal"),
-    )
-    return builder.as_markup()
-
-
-def build_styles_keyboard(selected_styles: list[str]) -> InlineKeyboardMarkup:
-    """Build keyboard for styles multi-selection (NEW: 4 communication styles)."""
-    builder = InlineKeyboardBuilder()
-
-    for style_id, style_label in THERAPIST_STYLES:
-        is_selected = style_id in selected_styles
-        prefix = "✅ " if is_selected else "⬜ "
-        builder.row(
-            InlineKeyboardButton(
-                text=f"{prefix}{style_label}",
-                callback_data=f"prescreen:style:{style_id}"
-            )
-        )
-
-    # Add Done button if at least one style selected
-    if selected_styles:
-        builder.row(
-            InlineKeyboardButton(text="✓ Готово", callback_data="prescreen:styles_done")
-        )
-
-    return builder.as_markup()
+async def _ask_next(message: types.Message, state: PrescreeningWizardState, step: str) -> None:
+    state.step = step
+    prompts = {
+        "awaiting_therapist_gender": ("<b>Выберите пол психолога:</b>\n(по умолчанию: Женский)", build_gender_keyboard()),
+        "awaiting_patient_name": ("<b>Как мне к вам обращаться?</b>\n(введите ваше имя или псевдоним)", None),
+        "awaiting_patient_sex": ("<b>Ваш пол:</b>\n(это поможет мне лучше понимать вас)", build_patient_sex_keyboard()),
+        "awaiting_address_mode": ("<b>Как мне к вам обращаться?</b>\nВыберите удобный для вас стиль общения:", build_address_mode_keyboard()),
+        "awaiting_styles_selection": ("<b>Выберите стиль общения психолога:</b>\n(можно выбрать несколько)", build_styles_keyboard(state.selected_styles)),
+    }
+    text, markup = prompts[step]
+    await _persist_and_send(state, message, text, markup)
 
 
 async def start_prescreening(message: types.Message) -> None:
-    """Start prescreening flow for user."""
-    user_id = message.from_user.id
-
-    logger.info("prescreening_started", user_id=user_id)
-
-    # Ensure user exists in database using new repositories
+    telegram_id = message.from_user.id
     async with get_db_session() as session:
         account_repo = AccountRepository(session)
-        account = await account_repo.get_by_telegram_id(user_id)
+        account = await account_repo.get_by_telegram_id(telegram_id)
         if not account:
             account = await account_repo.create_from_telegram(
-                telegram_id=user_id,
+                telegram_id=telegram_id,
                 username=message.from_user.username,
                 first_name=message.from_user.first_name,
                 last_name=message.from_user.last_name,
             )
+    state = PrescreeningWizardState(account_id=account.id)
+    await save_wizard_state(state)
+    await message.answer(
+        "👋 Добро пожаловать! Давайте настроим вашего психолога.\n\n"
+        "<b>Как вы хотите ко мне обращаться?</b>\n"
+        f"(по умолчанию: {DEFAULT_THERAPIST_NAME})",
+        reply_markup=build_skip_keyboard(),
+    )
 
-    # Initialize state
-    state = PrescreeningState()
-    set_prescreening_state(user_id, state)
+
+async def handle_prescreening_text(message: types.Message) -> bool:
+    user_id = message.from_user.id
+    if not await is_in_prescreening(user_id):
+        return False
+    state = await get_wizard_state(user_id)
+    if not state:
+        return False
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return False
+    if state.step == "processing_completion":
+        await message.answer("⏳ Подождите, завершаю настройку профиля")
+        return True
+    if state.step == "awaiting_therapist_name":
+        state.therapist_name = text[:50]
+        await _ask_next(message, state, "awaiting_therapist_gender")
+        return True
+    if state.step == "awaiting_patient_name":
+        state.patient_name = text[:100]
+        state.step = "awaiting_patient_age"
+        await save_wizard_state(state)
+        await message.answer("<b>Сколько вам лет?</b>\n(укажите число, например: 25)")
+        return True
+    if state.step == "awaiting_patient_age":
+        try:
+            age = int(text)
+            if age < 13 or age > 120:
+                raise ValueError
+            state.patient_age = age
+            await _ask_next(message, state, "awaiting_patient_sex")
+        except ValueError:
+            await message.answer("⚠️ Пожалуйста, введите корректный возраст")
+        return True
+    if state.step == "awaiting_patient_age":
+        return True
+    return False
+
+
+async def _complete_prescreening(message: types.Message, state: PrescreeningWizardState, dialogue_service: DialogueService, user_id: int) -> None:
+    started = time.time()
+    async with get_db_session() as session:
+        account = await AccountRepository(session).get_by_telegram_id(user_id)
+        if not account:
+            await message.answer("Ошибка сохранения анкеты. Нажмите /start")
+            return
+        await TherapistPreferenceRepository(session).update_preferences(
+            account_id=account.id,
+            therapist_name=state.therapist_name,
+            therapist_gender=state.therapist_gender,
+            therapist_styles=state.selected_styles,
+            mark_complete=True,
+        )
+        await UserProfileRepository(session).update_profile(
+            account_id=account.id,
+            display_name=state.patient_name,
+            age=state.patient_age,
+            sex=state.patient_sex,
+            address_mode=state.address_mode,
+            mark_complete=True,
+        )
+        card_filled = await ClinicalProfileRepository(session).is_card_filled(account.id)
+    await clear_prescreening_state(user_id)
+    await message.answer("\n".join(build_completion_profile_lines(
+        therapist_name=state.therapist_name,
+        therapist_gender=state.therapist_gender,
+        patient_name=state.patient_name,
+        patient_age=state.patient_age,
+        patient_sex=state.patient_sex,
+        address_mode=state.address_mode,
+        selected_styles=state.selected_styles,
+    )))
+    if card_filled:
+        await message.answer(build_welcome_back_message(state.patient_name, state.address_mode, state.therapist_gender))
+    else:
+        settings = get_settings()
+        await message.answer(build_intake_start_message(state.patient_name, state.address_mode, state.therapist_gender, settings.intake_min_user_turns, settings.intake_max_user_turns))
+    try:
+        await dialogue_service.create_session_silent(telegram_id=user_id)
+    except Exception as exc:
+        logger.error("auto_session_error", user_id=user_id, error=str(exc))
+    elapsed = int((time.time() - started) * 1000)
+    if elapsed > LATENCY_BUDGET_MS:
+        logger.warning("prescreening_total_slow", user_id=user_id, duration_ms=elapsed)
+
+
+async def start_prescreening_for_edit(message: types.Message, user_id: int) -> None:
+    async with get_db_session() as session:
+        account = await AccountRepository(session).get_by_telegram_id(user_id)
+        if not account:
+            await message.answer("Ошибка: пользователь не найден. Нажмите /start")
+            return
+    state = PrescreeningWizardState(account_id=account.id, therapist_name=DEFAULT_THERAPIST_NAME, therapist_gender=DEFAULT_THERAPIST_GENDER, is_edit_mode=True)
+    if account.therapist_preference and account.therapist_preference.therapist_traits:
+        state.selected_styles = migrate_traits_to_styles(account.therapist_preference.therapist_traits)
+    if account.user_profile:
+        profile = account.user_profile
+        state.patient_name = profile.display_name or ""
+        state.patient_age = profile.age
+        state.patient_sex = profile.sex or state.patient_sex
+        state.address_mode = profile.address_mode or state.address_mode
+    await save_wizard_state(state)
+    await message.answer("📝 <b>Редактирование анкеты</b>\n\n<b>Как вы хотите ко мне обращаться?</b>", reply_markup=build_skip_keyboard())
+
+
+@dispatcher.callback_query(F.data == "prescreen:skip_name")
+async def on_skip_name(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state:
+        return
+    await callback.answer("Пропущено")
+    await _ask_next(callback.message, state, "awaiting_therapist_gender")
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:gender:"))
+async def on_gender_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state:
+        return
+    state.therapist_gender = callback.data.split(":")[-1]
+    await callback.answer("Сохранено")
+    await callback.message.edit_text("<b>Пол психолога сохранен</b>")
+    await _ask_next(callback.message, state, "awaiting_patient_name")
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:sex:"))
+async def on_patient_sex_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state:
+        return
+    state.patient_sex = callback.data.split(":")[-1]
+    await callback.answer("Сохранено")
+    await callback.message.edit_text("<b>Пол сохранен</b>")
+    await _ask_next(callback.message, state, "awaiting_address_mode")
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:address:"))
+async def on_address_mode_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state:
+        return
+    state.address_mode = callback.data.split(":")[-1]
+    await callback.answer("Сохранено")
+    await callback.message.edit_text("<b>Стиль обращения сохранен</b>")
+    await _ask_next(callback.message, state, "awaiting_styles_selection")
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:style:"))
+async def on_style_toggle(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state:
+        return
+    style_id = callback.data.split(":")[-1]
+    if style_id in state.selected_styles:
+        state.selected_styles.remove(style_id)
+    else:
+        state.selected_styles.append(style_id)
+    await save_wizard_state(state)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=build_styles_keyboard(state.selected_styles))
+
+
+@dispatcher.callback_query(F.data == "prescreen:styles_done")
+async def on_styles_done(callback: types.CallbackQuery, dialogue_service: DialogueService) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or not state.selected_styles:
+        await callback.answer("Выберите хотя бы один стиль")
+        return
+    state.step = "processing_completion"
+    state.processing_started_at = datetime.utcnow()
+    await save_wizard_state(state)
+    await callback.answer("Готово")
+    await _complete_prescreening(callback.message, state, dialogue_service, callback.from_user.id)
+
+
+async def check_and_handle_prescreening(message: types.Message) -> bool:
+    if await is_in_prescreening(message.from_user.id):
+        return await handle_prescreening_text(message)
+    async with get_db_session() as session:
+        gate = await evaluate_prescreening_gate(message.from_user.id, session)
+    if not gate.account_exists or not gate.is_complete:
+        await start_prescreening(message)
+        return True
+    return False
+
+
+async def clear_prescreening_state(user_id: int) -> None:
+    await clear_wizard_state(user_id)
+
+
+async def is_in_prescreening(user_id: int) -> bool:
+    return await state_is_in_prescreening(user_id)
+
+"""Prescreening flow handlers."""
+
+# from __future__ import annotations
+
+import time
+from datetime import datetime
+
+from aiogram import F, types
+
+from core.config import get_settings
+from core.intake_user_copy import build_intake_start_message, build_welcome_back_message
+from core.logging import LogContexts, get_logger
+from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME
+from db.repositories import (
+    AccountRepository,
+    ClinicalProfileRepository,
+    TherapistPreferenceRepository,
+    UserProfileRepository,
+)
+from db.session import get_db_session
+from integrations.telegram.bot import dispatcher
+from integrations.telegram.prescreening_flow import (
+    build_completion_profile_lines,
+    migrate_traits_to_styles,
+)
+from integrations.telegram.prescreening_keyboards import (
+    build_address_mode_keyboard,
+    build_gender_keyboard,
+    build_patient_sex_keyboard,
+    build_skip_keyboard,
+    build_styles_keyboard,
+)
+from integrations.telegram.prescreening_state import (
+    PrescreeningWizardState,
+    clear_wizard_state,
+    get_wizard_state,
+    is_in_prescreening as state_is_in_prescreening,
+    save_wizard_state,
+)
+from services.dialogue_service import DialogueService
+from services.prescreening_gate import evaluate_prescreening_gate
+
+logger = get_logger(LogContexts.TELEGRAM)
+LATENCY_BUDGET_MS = 500
+
+
+async def start_prescreening(message: types.Message) -> None:
+    telegram_id = message.from_user.id
+    logger.info("prescreening_started", user_id=telegram_id)
+
+    async with get_db_session() as session:
+        account_repo = AccountRepository(session)
+        account = await account_repo.get_by_telegram_id(telegram_id)
+        if not account:
+            account = await account_repo.create_from_telegram(
+                telegram_id=telegram_id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+            )
+    state = PrescreeningWizardState(account_id=account.id)
+    await save_wizard_state(state)
 
     await message.answer(
         "👋 Добро пожаловать! Давайте настроим вашего психолога.\n\n"
@@ -181,380 +345,622 @@ async def start_prescreening(message: types.Message) -> None:
 
 
 async def handle_prescreening_text(message: types.Message) -> bool:
-    """
-    Handle text input during prescreening.
-    Returns True if message was handled, False otherwise.
-    Commands (text starting with /) are ignored and not processed as answers.
-    """
     user_id = message.from_user.id
-
-    if not is_in_prescreening(user_id):
+    if not await is_in_prescreening(user_id):
         return False
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(user_id)
     if not state:
         return False
 
-    # Guard: don't process commands as prescreening answers
     text = message.text.strip() if message.text else ""
     if text.startswith("/"):
-        logger.debug("command_ignored_in_prescreening", user_id=user_id, command=text[:20])
-        return False  # Let command handlers process it
+        return False
 
-    # Guard: don't process if in completion phase
     if state.step == "processing_completion":
-        logger.debug("prescreening_completion_in_progress", user_id=user_id)
         await message.answer("⏳ Подождите, завершаю настройку профиля")
         return True
 
     if state.step == "awaiting_therapist_name":
-        # User provided custom therapist name
         if text:
-            state.therapist_name = text[:50]  # Limit length
+            state.therapist_name = text[:50]
         await _ask_gender(message, state)
         return True
 
-    elif state.step == "awaiting_patient_name":
-        # User provided their name/pseudonym
+    if state.step == "awaiting_patient_name":
         if not text:
-            await message.answer(
-                "⚠️ Пожалуйста, введите ваше имя или псевдоним."
-            )
+            await message.answer("⚠️ Пожалуйста, введите ваше имя или псевдоним.")
             return True
         state.patient_name = text[:100]
         state.step = "awaiting_patient_age"
-        await message.answer(
-            "<b>Сколько вам лет?</b>\n"
-            "(укажите число, например: 25)"
-        )
+        await save_wizard_state(state)
+        await message.answer("<b>Сколько вам лет?</b>\n(укажите число, например: 25)")
         return True
 
-    elif state.step == "awaiting_patient_age":
-        # User provided age - validate
+    if state.step == "awaiting_patient_age":
         try:
             age = int(text)
             if age < 13 or age > 120:
                 raise ValueError("Age out of range")
             state.patient_age = age
-            # NEW: After age, ask for sex
             state.step = "awaiting_patient_sex"
+            await save_wizard_state(state)
             await _ask_patient_sex(message, state)
             return True
         except ValueError:
-            await message.answer(
-                "⚠️ Пожалуйста, введите корректный возраст"
-            )
+            await message.answer("⚠️ Пожалуйста, введите корректный возраст")
             return True
 
     return False
 
 
-async def _ask_gender(message: types.Message, state: PrescreeningState) -> None:
-    """Ask for therapist gender."""
+async def _ask_gender(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_therapist_gender"
+    await save_wizard_state(state)
     await message.answer(
-        "<b>Выберите пол психолога:</b>\n"
-        "(по умолчанию: Женский)",
+        "<b>Выберите пол психолога:</b>\n(по умолчанию: Женский)",
         reply_markup=build_gender_keyboard(),
     )
 
 
-async def _ask_patient_name(message: types.Message, state: PrescreeningState) -> None:
-    """Ask for patient name/pseudonym."""
+async def _ask_patient_name(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_patient_name"
-    await message.answer(
-        "<b>Как мне к вам обращаться?</b>\n"
-        "(введите ваше имя или псевдоним)"
-    )
+    await save_wizard_state(state)
+    await message.answer("<b>Как мне к вам обращаться?</b>\n(введите ваше имя или псевдоним)")
 
 
-async def _ask_patient_sex(message: types.Message, state: PrescreeningState) -> None:
-    """NEW: Ask for patient sex."""
+async def _ask_patient_sex(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_patient_sex"
+    await save_wizard_state(state)
     await message.answer(
-        "<b>Ваш пол:</b>\n"
-        "(это поможет мне лучше понимать вас)",
+        "<b>Ваш пол:</b>\n(это поможет мне лучше понимать вас)",
         reply_markup=build_patient_sex_keyboard(),
     )
 
 
-async def _ask_address_mode(message: types.Message, state: PrescreeningState) -> None:
-    """NEW: Ask for address mode (ты/вы)."""
+async def _ask_address_mode(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_address_mode"
+    await save_wizard_state(state)
     await message.answer(
-        "<b>Как мне к вам обращаться?</b>\n"
-        "Выберите удобный для вас стиль общения:",
+        "<b>Как мне к вам обращаться?</b>\nВыберите удобный для вас стиль общения:",
         reply_markup=build_address_mode_keyboard(),
     )
 
 
-async def _ask_styles(message: types.Message, state: PrescreeningState) -> None:
-    """Ask for communication style selection (NEW: 4 distinct styles)."""
+async def _ask_styles(message: types.Message, state: PrescreeningWizardState) -> None:
     await message.answer(
-        "<b>Выберите стиль общения психолога:</b>\n"
-        "(можно выбрать несколько для динамического переключения)",
+        "<b>Выберите стиль общения психолога:</b>\n(можно выбрать несколько для динамического переключения)",
         reply_markup=build_styles_keyboard(state.selected_styles),
     )
 
 
-def _get_style_labels(style_ids: list[str]) -> list[str]:
-    """Convert style IDs to Russian labels (NEW: 4 communication styles)."""
-    style_map = dict(THERAPIST_STYLES)
-    return [style_map.get(sid, sid) for sid in style_ids]
-
-
-def _migrate_traits_to_styles(traits: list[str] | None) -> list[str]:
-    """Migrate old trait IDs to new style IDs (best effort mapping)."""
-    if not traits:
-        return []
-    # Mapping from old traits to new styles
-    trait_to_style = {
-        "strict": "business",
-        "business": "business",
-        "calm": "soft",
-        "kind": "friendly",
-        "restrained": "soft",
-        "empathetic": "friendly",
-    }
-    migrated = []
-    for trait in traits:
-        style = trait_to_style.get(trait)
-        if style and style not in migrated:
-            migrated.append(style)
-    return migrated if migrated else ["friendly"]  # Default fallback
-
-
-def _get_sex_label(sex: str) -> str:
-    """Convert sex ID to Russian label."""
-    mapping = {
-        "male": "Мужской",
-        "female": "Женский",
-        "prefer_not_to_say": "Не указан",
-    }
-    return mapping.get(sex, "Не указан")
-
-
-def _get_address_mode_label(mode: str) -> str:
-    """Convert address mode ID to Russian label."""
-    mapping = {
-        "formal": "На 'Вы'",
-        "informal": "На 'Ты'",
-    }
-    return mapping.get(mode, "На 'Вы'")
-
-
 async def _complete_prescreening(
     message: types.Message,
-    state: PrescreeningState,
-    user_id: int | None = None,
-    original_start_time: float | None = None,
+    state: PrescreeningWizardState,
+    dialogue_service: DialogueService,
+    user_id: int,
+    original_start_time: float,
 ) -> None:
-    """Save prescreening data and complete with auto-next message."""
     step_start = time.time()
-    actual_user_id = user_id if user_id is not None else message.from_user.id
 
-    logger.info(
-        "prescreening_completing",
-        user_id=actual_user_id,
-        therapist_name=state.therapist_name,
-        therapist_gender=state.therapist_gender,
-        patient_sex=state.patient_sex,
-        address_mode=state.address_mode,
-        styles_count=len(state.selected_styles),
-        selected_styles=state.selected_styles,
-    )
-
-    # Save to database using new repositories
-    async with get_db_session() as session:
-        account_repo = AccountRepository(session)
-        account = await account_repo.get_by_telegram_id(actual_user_id)
-
-        if account:
-            # Update therapist preferences (NEW: using styles instead of traits)
-            therapist_repo = TherapistPreferenceRepository(session)
-            await therapist_repo.update_preferences(
-                account_id=account.id,
-                therapist_name=state.therapist_name,
-                therapist_gender=state.therapist_gender,
-                therapist_styles=state.selected_styles,  # NEW: styles instead of traits
-                mark_complete=True,
-            )
-
-            # Update user profile (NEW: includes sex and address_mode)
-            user_profile_repo = UserProfileRepository(session)
-            await user_profile_repo.update_profile(
-                account_id=account.id,
-                display_name=state.patient_name,
-                age=state.patient_age,
-                sex=state.patient_sex,
-                address_mode=state.address_mode,
-                mark_complete=True,
-            )
-
-            # Check if clinical card is filled
-            from db.repositories import ClinicalProfileRepository
-            clinical_repo = ClinicalProfileRepository(session)
-            card_filled = await clinical_repo.is_card_filled(account.id)
-            db_account_id = account.id
-            patient_name = state.patient_name or ""
-        else:
-            logger.error("account_not_found_for_prescreening", telegram_id=actual_user_id)
-            card_filled = False
-            db_account_id = None
-            patient_name = ""
-
-    db_duration_ms = int((time.time() - step_start) * 1000)
-    logger.info("prescreening_db_saved", user_id=actual_user_id, account_id=db_account_id, db_duration_ms=db_duration_ms)
-
-    # Check latency budget
-    if db_duration_ms > LATENCY_BUDGET_MS:
-        logger.warning("prescreening_db_slow", user_id=actual_user_id, duration_ms=db_duration_ms, budget_ms=LATENCY_BUDGET_MS)
-
-    # Clear state
-    clear_prescreening_state(actual_user_id)
-
-    # Confirm completion with updated emoji - NEW fields included
-    gender_label = "Женский" if state.therapist_gender == "female" else "Мужской"
-    sex_label = _get_sex_label(state.patient_sex)
-    address_label = _get_address_mode_label(state.address_mode)
-    styles_labels = _get_style_labels(state.selected_styles)
-
-    # Build profile summary (NEW: styles instead of traits)
-    profile_lines = [
-        "✅ <b>Профиль обновлен!</b>",
-        "",
-        f"🧠 Имя психолога: {state.therapist_name}",
-        f"⚧ Пол психолога: {gender_label}",
-        "",
-        f"👤 Ваше имя: {state.patient_name}",
-        f"🎂 Возраст: {state.patient_age}",
-        f"⚥ Ваш пол: {sex_label}",
-        f"💬 Обращение: {address_label}",
-        f"✨ Стиль общения: {', '.join(styles_labels)}",  # NEW: styles label
-    ]
-
-    await message.answer("\n".join(profile_lines))
-
-    profile_duration_ms = int((time.time() - step_start) * 1000)
-
-    # Auto-send next message based on card status
-    next_msg_start = time.time()
-    if card_filled:
-        # Card already has data - welcome back message
-        welcome_msg = _build_welcome_back_message(
-            patient_name, state.address_mode, state.therapist_gender
-        )
-        await message.answer(welcome_msg)
-        logger.info("auto_sent_welcome_back", user_id=actual_user_id, card_filled=True)
-    else:
-        # Card empty - intake script message (rounds from INTAKE_* .env)
-        settings = get_settings()
-        intake_msg = build_intake_start_message(
-            patient_name,
-            state.address_mode,
-            state.therapist_gender,
-            settings.intake_min_user_turns,
-            settings.intake_max_user_turns,
-        )
-        await message.answer(intake_msg)
-        logger.info("auto_sent_intake_script", user_id=actual_user_id, card_filled=False)
-
-    next_msg_duration_ms = int((time.time() - next_msg_start) * 1000)
-
-    # Auto-create session so user can start messaging immediately
-    session_start = time.time()
-    try:
-        # Get dialogue_service from dispatcher context
-        from typing import cast
-        dialogue_service = cast(DialogueService | None, dispatcher.get("dialogue_service"))
-        if dialogue_service:
-            session_created = await dialogue_service.create_session_silent(
-                telegram_id=actual_user_id
-            )
-            if session_created:
-                logger.info("auto_session_created", user_id=actual_user_id, after_prescreening=True)
-            else:
-                logger.warning("auto_session_failed", user_id=actual_user_id)
-        else:
-            logger.warning("dialogue_service_not_available", user_id=actual_user_id)
-    except Exception as e:
-        logger.error("auto_session_error", user_id=actual_user_id, error=str(e))
-
-    session_duration_ms = int((time.time() - session_start) * 1000)
-    total_duration_ms = int((time.time() - (original_start_time or step_start)) * 1000)
-
-    logger.info(
-        "prescreening_completion_finished",
-        user_id=actual_user_id,
-        db_duration_ms=db_duration_ms,
-        profile_duration_ms=profile_duration_ms,
-        next_msg_duration_ms=next_msg_duration_ms,
-        session_duration_ms=session_duration_ms,
-        total_duration_ms=total_duration_ms,
-    )
-
-    if total_duration_ms > LATENCY_BUDGET_MS:
-        logger.warning("prescreening_total_slow", user_id=actual_user_id, duration_ms=total_duration_ms, budget_ms=LATENCY_BUDGET_MS)
-
-
-def _build_welcome_back_message(
-    patient_name: str,
-    address_mode: str = "formal",
-    therapist_gender: str = "female",
-) -> str:
-    """Build welcome back message when card IS already filled."""
-    name = patient_name or "друг"
-    tg = therapist_gender if therapist_gender in ("female", "male") else "female"
-    glad = "Рада" if tg == "female" else "Рад"
-
-    # Adjust greeting based on address mode
-    if address_mode == "informal":
-        # Informal (ты)
-        return (
-            f"Привет, {name}! {glad} тебя видеть. "
-            "Расскажи, как прошел твой день?"
-        )
-    else:
-        # Formal (вы) - default
-        return (
-            f"Привет, {name}! {glad} вас видеть. "
-            "Расскажите, как прошел ваш день?"
-        )
-
-
-async def start_prescreening_for_edit(message: types.Message, user_id: int) -> None:
-    """Start prescreening flow for editing existing profile."""
-    logger.info("prescreening_edit_started", user_id=user_id)
-
-    # Load current user data to pre-fill using new repositories
     async with get_db_session() as session:
         account_repo = AccountRepository(session)
         account = await account_repo.get_by_telegram_id(user_id)
-
         if not account:
-            logger.error("account_not_found_for_edit", telegram_id=user_id)
+            await message.answer("Ошибка сохранения анкеты. Нажмите /start")
+            return
+
+        therapist_repo = TherapistPreferenceRepository(session)
+        await therapist_repo.update_preferences(
+            account_id=account.id,
+            therapist_name=state.therapist_name,
+            therapist_gender=state.therapist_gender,
+            therapist_styles=state.selected_styles,
+            mark_complete=True,
+        )
+        user_profile_repo = UserProfileRepository(session)
+        await user_profile_repo.update_profile(
+            account_id=account.id,
+            display_name=state.patient_name,
+            age=state.patient_age,
+            sex=state.patient_sex,
+            address_mode=state.address_mode,
+            mark_complete=True,
+        )
+        clinical_repo = ClinicalProfileRepository(session)
+        card_filled = await clinical_repo.is_card_filled(account.id)
+
+    await clear_prescreening_state(user_id)
+
+    await message.answer(
+        "\n".join(
+            build_completion_profile_lines(
+                therapist_name=state.therapist_name,
+                therapist_gender=state.therapist_gender,
+                patient_name=state.patient_name,
+                patient_age=state.patient_age,
+                patient_sex=state.patient_sex,
+                address_mode=state.address_mode,
+                selected_styles=state.selected_styles,
+            )
+        )
+    )
+
+    if card_filled:
+        await message.answer(
+            build_welcome_back_message(
+                patient_name=state.patient_name,
+                address_mode=state.address_mode,
+                therapist_gender=state.therapist_gender,
+            )
+        )
+    else:
+        settings = get_settings()
+        await message.answer(
+            build_intake_start_message(
+                patient_name=state.patient_name,
+                address_mode=state.address_mode,
+                therapist_gender=state.therapist_gender,
+                min_user_turns=settings.intake_min_user_turns,
+                max_user_turns=settings.intake_max_user_turns,
+            )
+        )
+
+    try:
+        await dialogue_service.create_session_silent(telegram_id=user_id)
+    except Exception as exc:
+        logger.error("auto_session_error", user_id=user_id, error=str(exc))
+
+    total_duration_ms = int((time.time() - original_start_time) * 1000)
+    db_duration_ms = int((time.time() - step_start) * 1000)
+    logger.info(
+        "prescreening_completion_finished",
+        user_id=user_id,
+        db_duration_ms=db_duration_ms,
+        total_duration_ms=total_duration_ms,
+    )
+    if total_duration_ms > LATENCY_BUDGET_MS:
+        logger.warning("prescreening_total_slow", user_id=user_id, duration_ms=total_duration_ms)
+
+
+async def start_prescreening_for_edit(message: types.Message, user_id: int) -> None:
+    async with get_db_session() as session:
+        account_repo = AccountRepository(session)
+        account = await account_repo.get_by_telegram_id(user_id)
+        if not account:
             await message.answer("Ошибка: пользователь не найден. Нажмите /start")
             return
 
-    # Initialize state with edit mode flag
-    state = PrescreeningState()
-    state._is_edit_mode = True  # Mark as edit mode
-
-    # Pre-fill with existing values if available
+    state = PrescreeningWizardState(
+        account_id=account.id,
+        therapist_name=DEFAULT_THERAPIST_NAME,
+        therapist_gender=DEFAULT_THERAPIST_GENDER,
+        is_edit_mode=True,
+    )
     if account.therapist_preference:
         pref = account.therapist_preference
         if pref.therapist_name:
             state.therapist_name = pref.therapist_name
         if pref.therapist_gender:
             state.therapist_gender = pref.therapist_gender
-        # NEW: Load styles instead of traits
-        if getattr(pref, 'therapist_styles', None):
-            state.selected_styles = list(pref.therapist_styles)
-        elif getattr(pref, 'therapist_traits', None):
-            # Fallback: migrate old traits to new styles (best effort)
-            state.selected_styles = _migrate_traits_to_styles(pref.therapist_traits)
+        if pref.therapist_traits:
+            state.selected_styles = migrate_traits_to_styles(pref.therapist_traits)
+    if account.user_profile:
+        profile = account.user_profile
+        if profile.display_name:
+            state.patient_name = profile.display_name
+        if profile.age:
+            state.patient_age = profile.age
+        if profile.sex:
+            state.patient_sex = profile.sex
+        if profile.address_mode:
+            state.address_mode = profile.address_mode
+    await save_wizard_state(state)
 
-    # NEW: Pre-fill user profile data
+    await message.answer(
+        "📝 <b>Редактирование анкеты</b>\n\n"
+        "Давайте обновим настройки вашего психолога.\n\n"
+        "<b>Как вы хотите ко мне обращаться?</b>\n"
+        f"(текущее: {state.therapist_name})",
+        reply_markup=build_skip_keyboard(),
+    )
+
+
+@dispatcher.callback_query(F.data == "prescreen:skip_name")
+async def on_skip_name(callback: types.CallbackQuery) -> None:
+    await callback.answer("Пропущено")
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_therapist_name":
+        return
+    await _ask_gender(callback.message, state)
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:gender:"))
+async def on_gender_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_therapist_gender":
+        await callback.answer("Устаревшая кнопка")
+        return
+    gender = callback.data.split(":")[-1]
+    state.therapist_gender = gender
+    await save_wizard_state(state)
+    label = "Женский" if gender == "female" else "Мужской"
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Выбран пол психолога:</b> {label}")
+    await _ask_patient_name(callback.message, state)
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:sex:"))
+async def on_patient_sex_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_patient_sex":
+        await callback.answer("Устаревшая кнопка")
+        return
+    sex = callback.data.split(":")[-1]
+    state.patient_sex = sex
+    await save_wizard_state(state)
+    label = "Мужской" if sex == "male" else ("Женский" if sex == "female" else "Не указан")
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Ваш пол:</b> {label}")
+    await _ask_address_mode(callback.message, state)
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:address:"))
+async def on_address_mode_select(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_address_mode":
+        await callback.answer("Устаревшая кнопка")
+        return
+    address_mode = callback.data.split(":")[-1]
+    state.address_mode = address_mode
+    state.step = "awaiting_styles_selection"
+    await save_wizard_state(state)
+    label = "На 'Ты'" if address_mode == "informal" else "На 'Вы'"
+    await callback.answer(f"Выбрано: {label}")
+    await callback.message.edit_text(f"<b>Стиль обращения:</b> {label}")
+    await _ask_styles(callback.message, state)
+
+
+@dispatcher.callback_query(F.data.startswith("prescreen:style:"))
+async def on_style_toggle(callback: types.CallbackQuery) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_styles_selection":
+        await callback.answer("Устаревшая кнопка")
+        return
+    style_id = callback.data.split(":")[-1]
+    if style_id in state.selected_styles:
+        state.selected_styles.remove(style_id)
+    else:
+        state.selected_styles.append(style_id)
+    await save_wizard_state(state)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=build_styles_keyboard(state.selected_styles))
+
+
+@dispatcher.callback_query(F.data == "prescreen:styles_done")
+async def on_styles_done(callback: types.CallbackQuery, dialogue_service: DialogueService) -> None:
+    state = await get_wizard_state(callback.from_user.id)
+    if not state or state.step != "awaiting_styles_selection":
+        await callback.answer("Устаревшая кнопка")
+        return
+    if not state.selected_styles:
+        await callback.answer("Выберите хотя бы один стиль")
+        return
+    state.step = "processing_completion"
+    state.processing_started_at = datetime.utcnow()
+    await save_wizard_state(state)
+    await callback.answer("Готово!")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _complete_prescreening(
+        message=callback.message,
+        state=state,
+        dialogue_service=dialogue_service,
+        user_id=callback.from_user.id,
+        original_start_time=time.time(),
+    )
+
+
+async def check_and_handle_prescreening(message: types.Message) -> bool:
+    user_id = message.from_user.id
+    if await is_in_prescreening(user_id):
+        return await handle_prescreening_text(message)
+
+    async with get_db_session() as session:
+        gate = await evaluate_prescreening_gate(user_id, session)
+    if not gate.account_exists or not gate.is_complete:
+        await start_prescreening(message)
+        return True
+    return False
+
+
+async def clear_prescreening_state(user_id: int) -> None:
+    await clear_wizard_state(user_id)
+
+
+async def is_in_prescreening(user_id: int) -> bool:
+    return await state_is_in_prescreening(user_id)
+
+"""Prescreening flow handlers."""
+
+# from __future__ import annotations
+
+import time
+from datetime import datetime
+
+from aiogram import F, types
+
+from core.config import get_settings
+from core.intake_user_copy import build_intake_start_message, build_welcome_back_message
+from core.logging import LogContexts, get_logger
+from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME
+from db.repositories import (
+    AccountRepository,
+    ClinicalProfileRepository,
+    TherapistPreferenceRepository,
+    UserProfileRepository,
+)
+from db.session import get_db_session
+from integrations.telegram.bot import dispatcher
+from integrations.telegram.prescreening_flow import (
+    build_completion_profile_lines,
+    migrate_traits_to_styles,
+)
+from integrations.telegram.prescreening_keyboards import (
+    build_address_mode_keyboard,
+    build_gender_keyboard,
+    build_patient_sex_keyboard,
+    build_skip_keyboard,
+    build_styles_keyboard,
+)
+from integrations.telegram.prescreening_state import (
+    PrescreeningWizardState,
+    clear_wizard_state,
+    get_wizard_state,
+    is_in_prescreening as state_is_in_prescreening,
+    save_wizard_state,
+)
+from services.dialogue_service import DialogueService
+from services.prescreening_gate import evaluate_prescreening_gate
+
+logger = get_logger(LogContexts.TELEGRAM)
+LATENCY_BUDGET_MS = 500
+
+
+async def start_prescreening(message: types.Message) -> None:
+    """Start prescreening flow for user."""
+    telegram_id = message.from_user.id
+    logger.info("prescreening_started", user_id=telegram_id)
+
+    async with get_db_session() as session:
+        account_repo = AccountRepository(session)
+        account = await account_repo.get_by_telegram_id(telegram_id)
+        if not account:
+            account = await account_repo.create_from_telegram(
+                telegram_id=telegram_id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name,
+            )
+    state = PrescreeningWizardState(account_id=account.id)
+    await save_wizard_state(state)
+
+    await message.answer(
+        "👋 Добро пожаловать! Давайте настроим вашего психолога.\n\n"
+        "<b>Как вы хотите ко мне обращаться?</b>\n"
+        f"(по умолчанию: {DEFAULT_THERAPIST_NAME})",
+        reply_markup=build_skip_keyboard(),
+    )
+
+
+async def handle_prescreening_text(message: types.Message) -> bool:
+    """Handle text input during prescreening."""
+    user_id = message.from_user.id
+    if not await is_in_prescreening(user_id):
+        return False
+    state = await get_wizard_state(user_id)
+    if not state:
+        return False
+
+    text = message.text.strip() if message.text else ""
+    if text.startswith("/"):
+        return False
+
+    if state.step == "processing_completion":
+        await message.answer("⏳ Подождите, завершаю настройку профиля")
+        return True
+
+    if state.step == "awaiting_therapist_name":
+        if text:
+            state.therapist_name = text[:50]
+        await _ask_gender(message, state)
+        return True
+
+    if state.step == "awaiting_patient_name":
+        if not text:
+            await message.answer("⚠️ Пожалуйста, введите ваше имя или псевдоним.")
+            return True
+        state.patient_name = text[:100]
+        state.step = "awaiting_patient_age"
+        await save_wizard_state(state)
+        await message.answer("<b>Сколько вам лет?</b>\n(укажите число, например: 25)")
+        return True
+
+    if state.step == "awaiting_patient_age":
+        try:
+            age = int(text)
+            if age < 13 or age > 120:
+                raise ValueError("Age out of range")
+            state.patient_age = age
+            state.step = "awaiting_patient_sex"
+            await save_wizard_state(state)
+            await _ask_patient_sex(message, state)
+            return True
+        except ValueError:
+            await message.answer("⚠️ Пожалуйста, введите корректный возраст")
+            return True
+
+    return False
+
+
+async def _ask_gender(message: types.Message, state: PrescreeningWizardState) -> None:
+    state.step = "awaiting_therapist_gender"
+    await save_wizard_state(state)
+    await message.answer(
+        "<b>Выберите пол психолога:</b>\n(по умолчанию: Женский)",
+        reply_markup=build_gender_keyboard(),
+    )
+
+
+async def _ask_patient_name(message: types.Message, state: PrescreeningWizardState) -> None:
+    state.step = "awaiting_patient_name"
+    await save_wizard_state(state)
+    await message.answer("<b>Как мне к вам обращаться?</b>\n(введите ваше имя или псевдоним)")
+
+
+async def _ask_patient_sex(message: types.Message, state: PrescreeningWizardState) -> None:
+    state.step = "awaiting_patient_sex"
+    await save_wizard_state(state)
+    await message.answer(
+        "<b>Ваш пол:</b>\n(это поможет мне лучше понимать вас)",
+        reply_markup=build_patient_sex_keyboard(),
+    )
+
+
+async def _ask_address_mode(message: types.Message, state: PrescreeningWizardState) -> None:
+    state.step = "awaiting_address_mode"
+    await save_wizard_state(state)
+    await message.answer(
+        "<b>Как мне к вам обращаться?</b>\nВыберите удобный для вас стиль общения:",
+        reply_markup=build_address_mode_keyboard(),
+    )
+
+
+async def _ask_styles(message: types.Message, state: PrescreeningWizardState) -> None:
+    await message.answer(
+        "<b>Выберите стиль общения психолога:</b>\n(можно выбрать несколько для динамического переключения)",
+        reply_markup=build_styles_keyboard(state.selected_styles),
+    )
+
+
+async def _complete_prescreening(
+    message: types.Message,
+    state: PrescreeningWizardState,
+    dialogue_service: DialogueService,
+    user_id: int,
+    original_start_time: float,
+) -> None:
+    step_start = time.time()
+    logger.info(
+        "prescreening_completing",
+        user_id=user_id,
+        therapist_name=state.therapist_name,
+        therapist_gender=state.therapist_gender,
+    )
+
+    async with get_db_session() as session:
+        account_repo = AccountRepository(session)
+        account = await account_repo.get_by_telegram_id(user_id)
+        if not account:
+            logger.error("account_not_found_for_prescreening", telegram_id=user_id)
+            await message.answer("Ошибка сохранения анкеты. Нажмите /start")
+            return
+
+        therapist_repo = TherapistPreferenceRepository(session)
+        await therapist_repo.update_preferences(
+            account_id=account.id,
+            therapist_name=state.therapist_name,
+            therapist_gender=state.therapist_gender,
+            therapist_styles=state.selected_styles,
+            mark_complete=True,
+        )
+
+        user_profile_repo = UserProfileRepository(session)
+        await user_profile_repo.update_profile(
+            account_id=account.id,
+            display_name=state.patient_name,
+            age=state.patient_age,
+            sex=state.patient_sex,
+            address_mode=state.address_mode,
+            mark_complete=True,
+        )
+
+        clinical_repo = ClinicalProfileRepository(session)
+        card_filled = await clinical_repo.is_card_filled(account.id)
+        patient_name = state.patient_name or ""
+
+    db_duration_ms = int((time.time() - step_start) * 1000)
+    if db_duration_ms > LATENCY_BUDGET_MS:
+        logger.warning("prescreening_db_slow", user_id=user_id, duration_ms=db_duration_ms)
+
+    await clear_prescreening_state(user_id)
+
+    profile_lines = build_completion_profile_lines(
+        therapist_name=state.therapist_name,
+        therapist_gender=state.therapist_gender,
+        patient_name=state.patient_name,
+        patient_age=state.patient_age,
+        patient_sex=state.patient_sex,
+        address_mode=state.address_mode,
+        selected_styles=state.selected_styles,
+    )
+    await message.answer("\n".join(profile_lines))
+
+    if card_filled:
+        await message.answer(
+            build_welcome_back_message(
+                patient_name=patient_name,
+                address_mode=state.address_mode,
+                therapist_gender=state.therapist_gender,
+            )
+        )
+    else:
+        settings = get_settings()
+        await message.answer(
+            build_intake_start_message(
+                patient_name=patient_name,
+                address_mode=state.address_mode,
+                therapist_gender=state.therapist_gender,
+                min_user_turns=settings.intake_min_user_turns,
+                max_user_turns=settings.intake_max_user_turns,
+            )
+        )
+
+    try:
+        await dialogue_service.create_session_silent(telegram_id=user_id)
+    except Exception as exc:
+        logger.error("auto_session_error", user_id=user_id, error=str(exc))
+
+    total_duration_ms = int((time.time() - original_start_time) * 1000)
+    logger.info("prescreening_completion_finished", user_id=user_id, total_duration_ms=total_duration_ms)
+
+
+async def start_prescreening_for_edit(message: types.Message, user_id: int) -> None:
+    """Start prescreening in edit mode using persisted state."""
+    logger.info("prescreening_edit_started", user_id=user_id)
+    async with get_db_session() as session:
+        account_repo = AccountRepository(session)
+        account = await account_repo.get_by_telegram_id(user_id)
+        if not account:
+            await message.answer("Ошибка: пользователь не найден. Нажмите /start")
+            return
+
+    state = PrescreeningWizardState(
+        account_id=account.id,
+        therapist_name=DEFAULT_THERAPIST_NAME,
+        therapist_gender=DEFAULT_THERAPIST_GENDER,
+        is_edit_mode=True,
+    )
+
+    if account.therapist_preference:
+        pref = account.therapist_preference
+        if pref.therapist_name:
+            state.therapist_name = pref.therapist_name
+        if pref.therapist_gender:
+            state.therapist_gender = pref.therapist_gender
+        if pref.therapist_traits:
+            state.selected_styles = migrate_traits_to_styles(pref.therapist_traits)
     if account.user_profile:
         profile = account.user_profile
         if profile.display_name:
@@ -566,8 +972,7 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
         if profile.address_mode:
             state.address_mode = profile.address_mode
 
-    set_prescreening_state(user_id, state)
-
+    await save_wizard_state(state)
     await message.answer(
         "📝 <b>Редактирование анкеты</b>\n\n"
         "Давайте обновим настройки вашего психолога.\n\n"
@@ -577,237 +982,121 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
     )
 
 
-# Callback handlers
 @dispatcher.callback_query(F.data == "prescreen:skip_name")
 async def on_skip_name(callback: types.CallbackQuery) -> None:
-    """Handle Skip button for therapist name."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-
-    # Fast response to prevent Telegram loading indicator
     await callback.answer("Пропущено")
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_therapist_name":
-        logger.debug("skip_name_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
-
     await _ask_gender(callback.message, state)
-    logger.debug("skip_name_processed", user_id=user_id, duration_ms=int((time.time() - start_time) * 1000))
 
 
 @dispatcher.callback_query(F.data.startswith("prescreen:gender:"))
 async def on_gender_select(callback: types.CallbackQuery) -> None:
-    """Handle therapist gender selection."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_therapist_gender":
         await callback.answer("Устаревшая кнопка")
-        logger.debug("gender_select_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
-
     gender = callback.data.split(":")[-1]
     state.therapist_gender = gender
-
-    gender_label = "Женский" if gender == "female" else "Мужской"
-
-    # Fast operations parallel where possible
-    try:
-        # Answer callback first
-        await callback.answer(f"Выбран: {gender_label}")
-
-        # Edit message to show selection
-        await callback.message.edit_text(
-            f"<b>Выбран пол психолога:</b> {gender_label}"
-        )
-
-        # Continue flow
-        await _ask_patient_name(callback.message, state)
-    except Exception as e:
-        logger.warning("gender_select_error", user_id=user_id, error=str(e))
-
-    logger.debug("gender_select_processed", user_id=user_id, gender=gender, duration_ms=int((time.time() - start_time) * 1000))
+    await save_wizard_state(state)
+    label = "Женский" if gender == "female" else "Мужской"
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Выбран пол психолога:</b> {label}")
+    await _ask_patient_name(callback.message, state)
 
 
-# NEW: Patient sex selection handler
 @dispatcher.callback_query(F.data.startswith("prescreen:sex:"))
 async def on_patient_sex_select(callback: types.CallbackQuery) -> None:
-    """Handle patient sex selection."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_patient_sex":
         await callback.answer("Устаревшая кнопка")
-        logger.debug("sex_select_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
-
     sex = callback.data.split(":")[-1]
     state.patient_sex = sex
-
-    sex_label = _get_sex_label(sex)
-
-    try:
-        # Answer callback first
-        await callback.answer(f"Выбран: {sex_label}")
-
-        # Edit message to show selection
-        await callback.message.edit_text(
-            f"<b>Ваш пол:</b> {sex_label}"
-        )
-
-        # Continue to address mode selection (NEW)
-        await _ask_address_mode(callback.message, state)
-    except Exception as e:
-        logger.warning("sex_select_error", user_id=user_id, error=str(e))
-
-    logger.debug("sex_select_processed", user_id=user_id, sex=sex, duration_ms=int((time.time() - start_time) * 1000))
+    await save_wizard_state(state)
+    label = "Мужской" if sex == "male" else ("Женский" if sex == "female" else "Не указан")
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Ваш пол:</b> {label}")
+    await _ask_address_mode(callback.message, state)
 
 
-# NEW: Address mode selection handler
 @dispatcher.callback_query(F.data.startswith("prescreen:address:"))
 async def on_address_mode_select(callback: types.CallbackQuery) -> None:
-    """Handle address mode selection (ты/вы)."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_address_mode":
         await callback.answer("Устаревшая кнопка")
-        logger.debug("address_select_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
-
     address_mode = callback.data.split(":")[-1]
     state.address_mode = address_mode
-
-    address_label = _get_address_mode_label(address_mode)
-
-    try:
-        # Answer callback first
-        await callback.answer(f"Выбрано: {address_label}")
-
-        # Edit message to show selection
-        await callback.message.edit_text(
-            f"<b>Стиль обращения:</b> {address_label}"
-        )
-
-        # Continue to styles selection (NEW)
-        state.step = "awaiting_styles_selection"
-        await _ask_styles(callback.message, state)
-    except Exception as e:
-        logger.warning("address_select_error", user_id=user_id, error=str(e))
-
-    logger.debug("address_select_processed", user_id=user_id, mode=address_mode, duration_ms=int((time.time() - start_time) * 1000))
+    state.step = "awaiting_styles_selection"
+    await save_wizard_state(state)
+    label = "На 'Ты'" if address_mode == "informal" else "На 'Вы'"
+    await callback.answer(f"Выбрано: {label}")
+    await callback.message.edit_text(f"<b>Стиль обращения:</b> {label}")
+    await _ask_styles(callback.message, state)
 
 
 @dispatcher.callback_query(F.data.startswith("prescreen:style:"))
 async def on_style_toggle(callback: types.CallbackQuery) -> None:
-    """Handle style toggle in multi-selection (NEW: 4 communication styles)."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-
-    state = get_prescreening_state(user_id)
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_styles_selection":
         await callback.answer("Устаревшая кнопка")
-        logger.debug("style_toggle_outdated", user_id=user_id, step=getattr(state, 'step', None))
         return
-
     style_id = callback.data.split(":")[-1]
-
-    # Toggle selection
     if style_id in state.selected_styles:
         state.selected_styles.remove(style_id)
-        action = "removed"
     else:
         state.selected_styles.append(style_id)
-        action = "added"
-
-    # Fast response and keyboard update
-    try:
-        await callback.answer()  # Empty answer is fast
-        await callback.message.edit_reply_markup(
-            reply_markup=build_styles_keyboard(state.selected_styles)
-        )
-    except Exception as e:
-        logger.warning("style_toggle_error", user_id=user_id, style=style_id, error=str(e))
-
-    duration_ms = int((time.time() - start_time) * 1000)
-    if duration_ms > 200:  # Style toggle should be very fast
-        logger.warning("style_toggle_slow", user_id=user_id, style=style_id, action=action, duration_ms=duration_ms)
-    else:
-        logger.debug("style_toggle_processed", user_id=user_id, style=style_id, action=action, duration_ms=duration_ms)
+    await save_wizard_state(state)
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=build_styles_keyboard(state.selected_styles))
 
 
 @dispatcher.callback_query(F.data == "prescreen:styles_done")
-async def on_styles_done(callback: types.CallbackQuery) -> None:
-    """Handle completion of styles selection with performance tracking (NEW)."""
-    start_time = time.time()
-    user_id = callback.from_user.id
-    state = get_prescreening_state(user_id)
-
+async def on_styles_done(callback: types.CallbackQuery, dialogue_service: DialogueService) -> None:
+    state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_styles_selection":
         await callback.answer("Устаревшая кнопка")
         return
-
     if not state.selected_styles:
         await callback.answer("Выберите хотя бы один стиль")
         return
 
-    # Mark as processing to prevent double-clicks and concurrent processing
     state.step = "processing_completion"
-    state._processing_start_time = start_time
-
+    state.processing_started_at = datetime.utcnow()
+    await save_wizard_state(state)
     await callback.answer("Готово!")
-
-    # Try to delete the traits selection message for cleaner UX
     try:
         await callback.message.delete()
-        logger.debug("traits_message_deleted", user_id=user_id, latency_ms=int((time.time() - start_time) * 1000))
-    except Exception as e:
-        # Fallback: edit text to show completion
-        logger.debug("traits_message_delete_failed", user_id=user_id, error=str(e))
-        try:
-            await callback.message.edit_text("✅ Выбор завершен")
-        except Exception:
-            pass
-
-    step1_time = time.time()
-    await _complete_prescreening(callback.message, state, user_id=user_id, original_start_time=start_time)
-
-    total_duration_ms = int((time.time() - start_time) * 1000)
-    logger.info("prescreening_completion_finished", user_id=user_id, total_duration_ms=total_duration_ms)
+    except Exception:
+        pass
+    await _complete_prescreening(
+        message=callback.message,
+        state=state,
+        dialogue_service=dialogue_service,
+        user_id=callback.from_user.id,
+        original_start_time=time.time(),
+    )
 
 
 async def check_and_handle_prescreening(message: types.Message) -> bool:
-    """
-    Check if user needs prescreening and handle it.
-    Returns True if prescreening was initiated or handled, False otherwise.
-    """
+    """Return True when prescreening started or continued."""
     user_id = message.from_user.id
-
-    # If already in prescreening, continue it
-    if is_in_prescreening(user_id):
+    if await is_in_prescreening(user_id):
         return await handle_prescreening_text(message)
 
-    # Check if user exists and has completed prescreening using new repositories
     async with get_db_session() as session:
-        account_repo = AccountRepository(session)
-        account = await account_repo.get_by_telegram_id(user_id)
-
-        if not account:
-            # New user - start prescreening
-            await start_prescreening(message)
-            return True
-
-        # Check prescreening completion via therapist_preference
-        pref_repo = TherapistPreferenceRepository(session)
-        is_complete = await pref_repo.is_prescreening_complete(account.id)
-
-        if not is_complete:
-            # Existing user without completed prescreening
-            await start_prescreening(message)
-            return True
-
+        gate = await evaluate_prescreening_gate(user_id, session)
+    if not gate.account_exists or not gate.is_complete:
+        await start_prescreening(message)
+        return True
     return False
+
+
+async def clear_prescreening_state(user_id: int) -> None:
+    await clear_wizard_state(user_id)
+
+
+async def is_in_prescreening(user_id: int) -> bool:
+    return await state_is_in_prescreening(user_id)

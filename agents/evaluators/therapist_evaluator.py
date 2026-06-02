@@ -5,7 +5,7 @@ All prompts and evaluation logic kept exactly as in original.
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
@@ -26,10 +26,6 @@ class TherapistEvaluator:
     def __init__(self):
         self.settings = get_settings()
         self.llm_client = OpenRouterClient()
-        self._last_session_memory: Optional[Dict] = None
-        self._all_sessions_memory: Optional[List[Dict]] = None
-        self._strategy_counter = {}
-        self._current_session_num: int = 1
     
     def _parse_response(self, response: Any) -> Any:
         """Parse LLM response - handles both string and object responses."""

@@ -59,14 +59,6 @@ class AgentLog(Base, TimestampMixin):
     success: Mapped[bool] = mapped_column(default=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Langfuse trace correlation
-    langfuse_trace_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True, index=True
-    )
-    langfuse_generation_id: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
-    )
-
     # Additional metadata (renamed to avoid SQLAlchemy reserved attribute conflict)
     extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(
         "metadata", JSON, nullable=True

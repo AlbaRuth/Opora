@@ -88,3 +88,24 @@ def build_intake_start_message(
         "Расскажите, пожалуйста, что сейчас беспокоит вас больше всего?"
     )
     return body
+
+
+def build_welcome_back_message(
+    patient_name: str,
+    address_mode: str = "formal",
+    therapist_gender: str = "female",
+) -> str:
+    """Welcome-back message for users with an existing card."""
+    name = patient_name or "друг"
+    tg = therapist_gender if therapist_gender in ("female", "male") else "female"
+    glad = "Рада" if tg == "female" else "Рад"
+
+    if address_mode == "informal":
+        return (
+            f"Привет, {name}! {glad} тебя видеть. "
+            "Расскажи, как прошел твой день?"
+        )
+    return (
+        f"Привет, {name}! {glad} вас видеть. "
+        "Расскажите, как прошел ваш день?"
+    )

@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+from agents.prompts.intake_fallbacks import build_intake_fallback_response
+
 if TYPE_CHECKING:
     from agents.intake.response_policy import TurnDirectives
 
@@ -656,52 +658,9 @@ Respond with JSON only.
         patient_message: str = "",
     ) -> str:
         """Multi-sentence fallback when intake LLM fails — no template one-line questions."""
-        import random
-
-        _ = therapist_gender  # kept for API compatibility
-        msg = (patient_message or "").strip()
-        if msg:
-            snippet = msg[:120] + ("…" if len(msg) > 120 else "")
-            if address_mode == "informal":
-                reflect = f"Я услышал{'а' if therapist_gender == 'female' else ''}, что ты написал{'(а)' if len(msg) < 3 else ''}: «{snippet}». "
-                body = (
-                    f"{reflect}"
-                    "Мне важно понять это глубже, в твоём темпе. "
-                    "Можешь чуть подробнее рассказать, что для тебя сейчас самое ощутимое в этом?"
-                )
-            else:
-                reflect = f"Я услышал{'а' if therapist_gender == 'female' else ''} ваше сообщение: «{snippet}». "
-                body = (
-                    f"{reflect}"
-                    "Мне важно понять это глубже, в вашем темпе. "
-                    "Можете чуть подробнее рассказать, что для вас сейчас самое ощутимое в этом?"
-                )
-            return body
-
-        if address_mode == "informal":
-            options = [
-                (
-                    "Спасибо, что написал. Я здесь, чтобы спокойно разобраться с тем, "
-                    "что для тебя сейчас важно — без спешки и без оценок. "
-                    "Расскажи, пожалуйста, что больше всего занимает тебя в последнее время."
-                ),
-                (
-                    "Хорошо, что ты обратился. На этом этапе мне важно просто услышать тебя — "
-                    "как ты себя чувствуешь и что принесло сюда. "
-                    "С чего тебе комфортнее начать?"
-                ),
-            ]
-        else:
-            options = [
-                (
-                    "Спасибо, что написали. Я здесь, чтобы спокойно разобраться с тем, "
-                    "что для вас сейчас важно — без спешки и без оценок. "
-                    "Расскажите, пожалуйста, что больше всего занимает вас в последнее время."
-                ),
-                (
-                    "Хорошо, что вы обратились. На этом этапе мне важно просто услышать вас — "
-                    "как вы себя чувствуете и что принесло сюда. "
-                    "С чего вам комфортнее начать?"
-                ),
-            ]
-        return random.choice(options)
+        _ = patient_name
+        return build_intake_fallback_response(
+            address_mode=address_mode,
+            therapist_gender=therapist_gender,
+            patient_message=patient_message,
+        )

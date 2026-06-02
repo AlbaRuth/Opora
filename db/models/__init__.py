@@ -16,6 +16,7 @@ from .account import Account
 # Profile schema
 from .user_profile import UserProfile
 from .therapist_preference import TherapistPreference
+from .prescreening_state import PrescreeningState
 
 # Clinical schema
 from .clinical_profile import ClinicalProfile
@@ -38,6 +39,7 @@ __all__ = [
     # Profile
     "UserProfile",
     "TherapistPreference",
+    "PrescreeningState",
     # Clinical
     "ClinicalProfile",
     # Therapy

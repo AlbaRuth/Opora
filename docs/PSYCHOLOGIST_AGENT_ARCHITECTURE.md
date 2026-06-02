@@ -35,7 +35,7 @@ DialogueService
    -> TherapistAgent (LLM, терапевтический ответ)
         -> TherapistEvaluator (LLM, внутренние оценки)
    ->
-PostgreSQL + Langfuse + logs
+PostgreSQL + agent_logs + structlog
 ```
 
 ## Основные роли в системе
@@ -433,7 +433,6 @@ Intake считается завершенным, если выполнено о
 - latency;
 - token usage;
 - success/error;
-- `langfuse_trace_id`;
 - дополнительные metadata.
 
 Это слой наблюдаемости, а не бизнес-данных.
@@ -1380,7 +1379,7 @@ Return your answer strictly in JSON format, like this:
 
 ### 2. LLM observability
 
-Это `observability.agent_logs` плюс Langfuse.
+Это `observability.agent_logs` плюс
 
 Он нужен, чтобы видеть:
 
@@ -1400,7 +1399,6 @@ Return your answer strictly in JSON format, like this:
 - `DATABASE_URL`
 - `TELEGRAM_BOT_TOKEN`
 - `OPENROUTER_*`
-- `LANGFUSE_*`
 
 ### Therapist agent
 
@@ -1508,10 +1506,8 @@ Return your answer strictly in JSON format, like this:
 
 - decision logs;
 - agent logs;
-- Langfuse traces.
 
 ## Краткая таблица по агентам
-
 
 | Компонент            | Тип                        | Отвечает за                                                  | Когда вызывается                                           |
 | -------------------- | -------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
@@ -1520,7 +1516,6 @@ Return your answer strictly in JSON format, like this:
 | `TherapistAgent`     | Пользовательский LLM-агент | Основной терапевтический ответ                               | Старт `therapy` и каждый ход в `therapy`                   |
 | `TherapistEvaluator` | Внутренний LLM-агент       | Эмоции, стратегия, память, стадия, завершение, выбор терапии | Внутри `TherapistAgent`                                    |
 | Prescreening wizard  | Не LLM                     | Настройка персоны и профиля                                  | До первой полноценной сессии или при редактировании анкеты |
-
 
 ## Как это можно объяснять внешне
 
@@ -1538,7 +1533,7 @@ Return your answer strictly in JSON format, like this:
 - therapy как основной пользовательский агент;
 - evaluator как внутренний decision engine;
 - PostgreSQL как источник истины для состояния;
-- logs и Langfuse как слой наблюдаемости.
+- agent_logs и structlog как слой наблюдаемости.
 
 Именно такое разделение позволяет одновременно:
 

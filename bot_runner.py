@@ -14,7 +14,6 @@ from alembic.config import Config
 
 from core import configure_logging, get_settings, get_logger, LogContexts
 from db.session import verify_async_db_on_startup
-from integrations.langfuse import LangfuseClient, init_langfuse_on_startup
 from integrations.telegram import create_bot, create_dispatcher, setup_bot_on_startup, dispatcher
 from services.dialogue_service import DialogueService
 
@@ -92,32 +91,15 @@ async def main():
     dp["dialogue_service"] = dialogue_service
 
     await verify_async_db_on_startup()
-    init_langfuse_on_startup()
-    lf = LangfuseClient()
-    lf_boot = (
-        "disabled"
-        if not settings.langfuse_enabled
-        else ("active" if lf.is_enabled() else "unavailable")
-    )
-    lf_summary = (
-        "Langfuse отключён"
-        if not settings.langfuse_enabled
-        else (
-            "Langfuse активен"
-            if lf.is_enabled()
-            else "Langfuse недоступен (проверьте ключи и хост)"
-        )
-    )
 
     await setup_bot_on_startup(bot)
 
     logger.info(
         "opora_system_ready",
         summary=(
-            f"Система полностью запущена: БД доступна, {lf_summary}, Telegram настроен, "
+            "Система полностью запущена: БД доступна, Telegram настроен, "
             "запускается приём обновлений (polling)."
         ),
-        langfuse_boot=lf_boot,
     )
     logger.info("bot_started_polling")
 

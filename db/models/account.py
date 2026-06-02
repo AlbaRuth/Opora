@@ -13,6 +13,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .agent_log import AgentLog
     from .clinical_profile import ClinicalProfile
+    from .prescreening_state import PrescreeningState
     from .therapist_preference import TherapistPreference
     from .therapy_session import TherapySession
     from .user_profile import UserProfile
@@ -47,6 +48,12 @@ class Account(Base, TimestampMixin):
         cascade="all, delete-orphan",
     )
     clinical_profile: Mapped[Optional["ClinicalProfile"]] = relationship(
+        back_populates="account",
+        lazy="selectin",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    prescreening_state: Mapped[Optional["PrescreeningState"]] = relationship(
         back_populates="account",
         lazy="selectin",
         uselist=False,

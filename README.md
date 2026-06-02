@@ -38,8 +38,7 @@ Opora/
 │   └── prompts/       # Шаблоны промптов (NEW: address_mode)
 ├── integrations/      # Внешние интеграции
 │   ├── telegram/      # Бот и prescreening flow (NEW steps)
-│   ├── openrouter/    # LLM-клиент
-│   └── langfuse/      # Наблюдаемость
+│   └── openrouter/    # LLM-клиент
 ├── services/          # Слой бизнес-логики (DialogueService)
 ├── docs/              # Документация (NEW)
 │   ├── ARCHITECTURE.md
@@ -202,6 +201,5 @@ alembic revision --autogenerate -m "описание изменений"
 - `DATABASE_URL` — подключение к PostgreSQL
 - `TELEGRAM_BOT_TOKEN` — токен бота
 - `OPENROUTER_*` — настройки LLM-провайдера
-- `LANGFUSE_*` — настройки наблюдаемости
-- `LOG_*` — конфигурация логирования
+- `LOG_*` — конфигурация логирования (structlog + `agent_logs` в БД)
 - `INTAKE_*` — настройки intake-фазы

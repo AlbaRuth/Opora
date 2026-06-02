@@ -77,9 +77,6 @@ integrations/
 │   ├── bot.py      # Фабрика и настройка бота
 │   ├── handlers.py # Обработчики сообщений
 │   └── __init__.py
-├── langfuse/
-│   ├── client.py   # Клиент наблюдаемости
-│   └── __init__.py
 └── __init__.py
 ```
 
@@ -88,7 +85,6 @@ integrations/
 **Ключевые классы**:
 - `OpenRouterClient` — обертка над LLM API с retry-логикой
 - `create_bot()`, `dispatcher` — настройка Telegram-бота
-- `LangfuseClient`, `trace_scope()` — интеграция наблюдаемости
 
 ### 4. Слой агента (`agents/`)
 
@@ -194,8 +190,7 @@ services/
 Каждый вызов LLM:
    ↓
 1. AgentLogRepository.log_llm_call() - в PostgreSQL
-2. LangfuseClient.create_generation() - в Langfuse (если включен)
-3. Структурированный логгер - в файл/консоль
+2. Структурированный логгер - в файл/консоль
 ```
 
 ## Схема базы данных
@@ -242,7 +237,6 @@ services/
 **agent_logs**
 - Детализированные логи вызовов LLM
 - Содержит промпты, ответы, задержку и токены
-- Correlation ID Langfuse для связывания трасс
 
 ## Конфигурация
 
@@ -270,11 +264,6 @@ class Settings(BaseSettings):
     llm_therapist_temperature: float
     llm_evaluator_model: str
     llm_evaluator_temperature: float
-
-    # Langfuse (переиспользовано из SupportAssistant)
-    langfuse_enabled: bool
-    langfuse_public_key: str
-    langfuse_secret_key: str
 ```
 
 ## Стратегия логирования
@@ -354,18 +343,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  langfuse:
-    image: langfuse/langfuse:latest
-    environment:
-      # Конфигурация Langfuse
-
   bot:
     build: .
     environment:
       DATABASE_URL: postgresql+asyncpg://opora:opora@postgres:5432/opora
     depends_on:
       - postgres
-      - langfuse
 ```
 
 ## Точки входа
@@ -397,7 +380,7 @@ services:
 ### Релиз и откат
 
 1. Применить `scripts/migrate_intake_stage.py` на существующей БД.
-2. Включить intake в dev/staging (`INTAKE_ENABLED=true`), проверить трассы и логи.
+2. Включить intake в dev/staging (`INTAKE_ENABLED=true`), проверить логи в БД и structlog.
 3. В production включать постепенно, отслеживая события `intake_started`, `intake_turn_processed`, `flow_phase_switched`.
 4. При проблемах rollback без отката кода: `INTAKE_ENABLED=false` (роутинг вернется к прежнему терапевтическому потоку).
 
@@ -416,7 +399,7 @@ services:
 
 1. **Async-first**: все I/O-операции асинхронные (база данных, LLM, Telegram)
 2. **Repository pattern**: абстрагирует доступ к данным для удобства тестирования
-3. **Context managers**: сессии БД и трассы Langfuse реализованы через async context manager
+3. **Context managers**: сессии БД реализованы через async context manager
 4. **Structured logging**: JSON-логи для production и цветная консоль для разработки
 5. **Dual-source config**: переменные окружения для секретов/настроек, код — для значений по умолчанию
 6. **Stateless orchestration**: mutable state удалён из `TherapistAgent`, state передаётся через DTO

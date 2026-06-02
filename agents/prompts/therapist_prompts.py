@@ -6,6 +6,8 @@ NEW: Includes address_mode (formal/informal) for controlling tone (ты/вы).
 NEW: 4 distinct communication styles (friendly, soft, business, motivating) with dynamic switching.
 """
 
+from agents.prompts.therapist_fallbacks import build_therapist_fallback_response
+
 
 class TherapistPrompts:
     """Prompts for generating therapist responses."""
@@ -391,11 +393,4 @@ Your job is to respond to the patient compassionately and offer support in psych
         address_mode: str = "formal",  # NEW
     ) -> str:
         """Fallback when LLM fails. Supports Russian (default) and English."""
-        if language == "ru" or language == "russian":
-            if address_mode == "informal":
-                # Informal (ты)
-                return "Извини, я временно не могу обработать твой запрос. Пожалуйста, попробуй еще раз."
-            else:
-                # Formal (вы) - default
-                return "Извините, я временно не могу обработать ваш запрос. Пожалуйста, попробуйте еще раз."
-        return "Sorry, I'm temporarily unable to process your request, please try again."
+        return build_therapist_fallback_response(language=language, address_mode=address_mode)

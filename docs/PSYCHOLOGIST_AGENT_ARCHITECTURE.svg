@@ -228,7 +228,7 @@
   <text x="2060" y="620" class="h2">Audit / observability</text>
   <text x="2060" y="650" class="body">- therapy.decision_logs</text>
   <text x="2060" y="670" class="body">- observability.agent_logs</text>
-  <text x="2060" y="690" class="body">- Langfuse traces</text>
+  <text x="2060" y="690" class="body">- agent_logs + structlog</text>
 
   <rect x="20" y="1230" width="1110" height="95" rx="14" ry="14" class="box-orange"/>
   <text x="40" y="1260" class="h2">New session flow</text>

@@ -13,7 +13,6 @@ from core.config import get_settings
 from core.logging import LogContexts, get_logger
 from db.repositories import AgentLogRepository, ClinicalProfileRepository, MessageRepository
 from db.session import get_db_session
-from integrations.langfuse import get_current_trace_id
 from integrations.openrouter import OpenRouterClient
 
 from agents.evaluators.therapist_evaluator import TherapistEvaluator
@@ -39,7 +38,7 @@ class IntakeAgent:
 
     def _get_context_window_size(self) -> int:
         """Get the size of the dialogue context window."""
-        multiplier = getattr(self.settings, 'intake_context_window_multiplier', 2)
+        multiplier = self.settings.intake_context_window_multiplier
         return self.settings.intake_min_user_turns * multiplier
 
     async def _get_recent_dialogue(
@@ -63,7 +62,6 @@ class IntakeAgent:
     ) -> dict[str, Any]:
         """Process one intake turn and return next intake response."""
         account_id = int(state.patient_id)
-        trace_id = get_current_trace_id()
         max_user_turns = self._compute_max_user_turns()
 
         async with get_db_session() as session:
@@ -120,7 +118,6 @@ class IntakeAgent:
                 primary_emotion=primary_emotion,
                 emotional_intensity=emotional_intensity,
                 missing_fields=missing_before,
-                recent_dialogue=recent_dialogue,
                 min_sentences=self.settings.intake_min_response_sentences,
                 max_question_words=self.settings.intake_max_question_words,
                 hold_emotion_intensity_threshold=(
@@ -175,9 +172,9 @@ class IntakeAgent:
                 temperature=self.settings.llm_intake_temperature,
                 max_tokens=self.settings.llm_intake_max_tokens,
                 task_name="intake_turn",
-                top_p=getattr(self.settings, 'llm_intake_top_p', None),
-                frequency_penalty=getattr(self.settings, 'llm_intake_frequency_penalty', None),
-                presence_penalty=getattr(self.settings, 'llm_intake_presence_penalty', None),
+                top_p=self.settings.llm_intake_top_p,
+                frequency_penalty=self.settings.llm_intake_frequency_penalty,
+                presence_penalty=self.settings.llm_intake_presence_penalty,
             )
 
             parsed = self._parse_json_content(result["content"]) if result["success"] else {}
@@ -221,7 +218,6 @@ class IntakeAgent:
                 session_id=state.session_db_id,
                 prompt=user_prompt,
                 result=result,
-                trace_id=trace_id,
                 metadata={
                     "flow_phase": "intake",
                     "intake_user_turns_before": state.intake_user_turns,
@@ -308,7 +304,6 @@ class IntakeAgent:
         session_id: int | None,
         prompt: str,
         result: dict[str, Any],
-        trace_id: str | None,
         metadata: dict[str, Any],
     ) -> None:
         async with get_db_session() as session:
@@ -328,6 +323,5 @@ class IntakeAgent:
                 tokens_output=result.get("usage", {}).get("completion_tokens", 0),
                 success=result.get("success", False),
                 error_message=result.get("error"),
-                langfuse_trace_id=trace_id,
                 metadata=metadata,
             )

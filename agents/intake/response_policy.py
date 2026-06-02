@@ -228,13 +228,11 @@ class IntakeResponsePolicy:
         primary_emotion: str,
         emotional_intensity: float,
         missing_fields: list[str],
-        recent_dialogue: list[dict[str, str]] | None,
         min_sentences: int = 3,
         max_question_words: int = 25,
         hold_emotion_intensity_threshold: float = 0.95,
         max_user_turns: int | None = None,
     ) -> TurnDirectives:
-        _ = recent_dialogue
         keyword_style = IntakePrompts.resolve_active_style(
             patient_message, therapist_styles, current_user_turns
         )

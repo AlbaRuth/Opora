@@ -150,23 +150,6 @@ class Settings(BaseSettings):
         alias="LLM_INTAKE_PRESENCE_PENALTY",
     )
     
-    # Langfuse
-    langfuse_enabled: bool = Field(default=True, alias="LANGFUSE_ENABLED")
-    langfuse_public_key: str = Field(alias="LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key: str = Field(alias="LANGFUSE_SECRET_KEY")
-    langfuse_base_url: str = Field(
-        default="http://localhost:3000",
-        alias="LANGFUSE_BASE_URL"
-    )
-    langfuse_host: str = Field(
-        default="http://localhost:3000",
-        alias="LANGFUSE_HOST"
-    )
-    langfuse_generation_debug: bool = Field(
-        default=False,
-        alias="LANGFUSE_GENERATION_DEBUG"
-    )
-    
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"

@@ -18,6 +18,7 @@ from .base import BaseRepository
 from .account import AccountRepository
 from .user_profile import UserProfileRepository
 from .therapist_preference import TherapistPreferenceRepository
+from .prescreening_state import PrescreeningStateRepository
 from .clinical_profile import ClinicalProfileRepository
 from .session import SessionRepository
 from .intake_state import IntakeStateRepository
@@ -32,6 +33,7 @@ __all__ = [
     "AccountRepository",
     "UserProfileRepository",
     "TherapistPreferenceRepository",
+    "PrescreeningStateRepository",
     "ClinicalProfileRepository",
     "SessionRepository",
     "IntakeStateRepository",

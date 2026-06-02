@@ -34,8 +34,6 @@ class AgentLogRepository(BaseRepository[AgentLog]):
         tokens_output: int | None = None,
         success: bool = True,
         error_message: str | None = None,
-        langfuse_trace_id: str | None = None,
-        langfuse_generation_id: str | None = None,
         session_id: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> AgentLog:
@@ -56,8 +54,6 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             tokens_output=tokens_output,
             success=success,
             error_message=error_message,
-            langfuse_trace_id=langfuse_trace_id,
-            langfuse_generation_id=langfuse_generation_id,
             extra_metadata=metadata,
         )
 

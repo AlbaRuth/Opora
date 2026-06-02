@@ -68,7 +68,7 @@
     │                                                         │
     │  - LLM calls logging                                    │
     │  - Performance metrics                                  │
-    │  - Langfuse correlation                                 │
+    │  - LLM call metadata (agent_logs)                       │
     └─────────────────────────────────────────────────────────┘
 ```
 

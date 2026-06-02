@@ -8,7 +8,6 @@ from typing import Any, Dict
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
 from integrations.openrouter import OpenRouterClient
-from integrations.langfuse import trace_scope
 from agents.prompts.therapist_prompts import TherapistPrompts
 from agents.evaluators.therapist_evaluator import TherapistEvaluator
 from db.session import get_db_session
@@ -35,6 +34,29 @@ class TherapistAgent:
         self.settings = get_settings()
         self.llm_client = OpenRouterClient()
         self.evaluator = TherapistEvaluator()
+
+    async def _build_sessions_data(
+        self,
+        *,
+        user_id: int,
+        session_repo: SessionRepository,
+        msg_repo: MessageRepository,
+        exclude_session_id: int | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Build evaluator-ready history payload from DB sessions."""
+        all_sessions = await session_repo.get_all_account_sessions(user_id)
+        sessions_data: dict[str, dict[str, Any]] = {}
+        for s in all_sessions:
+            if exclude_session_id and s.id == exclude_session_id:
+                continue
+            session_key = f"session_{s.session_number}"
+            messages = await msg_repo.get_session_messages(s.id)
+            dialogs = [f"{'PATIENT' if m.role == 'patient' else 'DOCTOR'}: {m.content}" for m in messages]
+            sessions_data[session_key] = {
+                "therapy": s.therapy_type,
+                "dialogs": dialogs,
+            }
+        return sessions_data
 
     async def start_new_session(self, state: SessionState) -> Dict[str, Any]:
         """
@@ -68,27 +90,14 @@ class TherapistAgent:
                     "current problems and symptoms": "",
                 }
 
-            # Get existing sessions from DB
             session_repo = SessionRepository(session)
-            existing_sessions = await session_repo.get_all_account_sessions(account.id)
-            sessions_for_eval = [
-                s for s in existing_sessions if s.id != state.session_db_id
-            ]
-
-            # Build sessions data for evaluator
-            sessions_data = {}
             msg_repo = MessageRepository(session)
-            for s in sessions_for_eval:
-                session_key = f"session_{s.session_number}"
-
-                # Get messages for this session
-                messages = await msg_repo.get_session_messages(s.id)
-                dialogs = [f"{'PATIENT' if m.role == 'patient' else 'DOCTOR'}: {m.content}" for m in messages]
-
-                sessions_data[session_key] = {
-                    "therapy": s.therapy_type,
-                    "dialogs": dialogs,
-                }
+            sessions_data = await self._build_sessions_data(
+                user_id=account.id,
+                session_repo=session_repo,
+                msg_repo=msg_repo,
+                exclude_session_id=state.session_db_id,
+            )
 
         # Cross-session evaluation (async)
         evaluation_result = await self.evaluator.cross_session_evaluate(
@@ -194,17 +203,11 @@ class TherapistAgent:
             session_repo = SessionRepository(session)
             msg_repo = MessageRepository(session)
             
-            # Build sessions data for memory check
-            all_sessions = await session_repo.get_all_account_sessions(user_id_int)
-            sessions_data = {}
-            for s in all_sessions:
-                session_key = f"session_{s.session_number}"
-                messages = await msg_repo.get_session_messages(s.id)
-                dialogs = [f"{'PATIENT' if m.role == 'patient' else 'DOCTOR'}: {m.content}" for m in messages]
-                sessions_data[session_key] = {
-                    "therapy": s.therapy_type,
-                    "dialogs": dialogs,
-                }
+            sessions_data = await self._build_sessions_data(
+                user_id=user_id_int,
+                session_repo=session_repo,
+                msg_repo=msg_repo,
+            )
             
             memory_result = await self.evaluator.should_use_memory(
                 sessions_data,
@@ -361,43 +364,35 @@ class TherapistAgent:
             address_mode=state.address_mode,  # NEW
         )
 
-        # Log to Langfuse if enabled
-        async with trace_scope(
-            name="therapist_response_generation",
-            user_id=str(user_id),
-            session_id=str(state.session_db_id) if state.session_db_id else None,
-        ) as trace:
-            result = await self.llm_client.chat_completion(
+        result = await self.llm_client.chat_completion(
+            model=self.settings.llm_therapist_model,
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=self.settings.llm_therapist_temperature,
+            max_tokens=self.settings.llm_therapist_max_tokens,
+            task_name="generate_response",
+        )
+
+        async with get_db_session() as session:
+            agent_log_repo = AgentLogRepository(session)
+            await agent_log_repo.log_llm_call(
+                account_id=user_id,
+                agent_type="therapist",
+                task_name="generate_response",
                 model=self.settings.llm_therapist_model,
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
                 temperature=self.settings.llm_therapist_temperature,
                 max_tokens=self.settings.llm_therapist_max_tokens,
-                task_name="generate_response",
+                prompt=prompt[:5000],
+                response=result["content"][:5000] if result["content"] else None,
+                latency_ms=result["latency_ms"],
+                tokens_input=result["usage"]["prompt_tokens"],
+                tokens_output=result["usage"]["completion_tokens"],
+                success=result["success"],
+                error_message=result["error"],
+                session_id=state.session_db_id,
             )
-            
-            # Log agent call
-            async with get_db_session() as session:
-                agent_log_repo = AgentLogRepository(session)
-                await agent_log_repo.log_llm_call(
-                    account_id=user_id,  # NEW: account_id instead of user_id
-                    agent_type="therapist",
-                    task_name="generate_response",
-                    model=self.settings.llm_therapist_model,
-                    temperature=self.settings.llm_therapist_temperature,
-                    max_tokens=self.settings.llm_therapist_max_tokens,
-                    prompt=prompt[:5000],
-                    response=result["content"][:5000] if result["content"] else None,
-                    latency_ms=result["latency_ms"],
-                    tokens_input=result["usage"]["prompt_tokens"],
-                    tokens_output=result["usage"]["completion_tokens"],
-                    success=result["success"],
-                    error_message=result["error"],
-                    session_id=state.session_db_id,
-                    langfuse_trace_id=trace.id if trace else None,
-                )
 
         if result["success"]:
             raw_response = result["content"]

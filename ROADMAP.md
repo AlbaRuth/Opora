@@ -7,7 +7,7 @@
 ## Цели
 
 1. **Сохранить логику агента**: все алгоритмы принятия терапевтических решений остаются идентичными оригиналу
-2. **Современная инфраструктура**: PostgreSQL, структурированное логирование, наблюдаемость через Langfuse
+2. **Современная инфраструктура**: PostgreSQL, структурированное логирование, наблюдаемость через agent_logs и structlog
 3. **Чистая архитектура**: слоистый дизайн с четким разделением ответственности
 4. **Конфигурация через окружение**: все настройки задаются через `.env`
 5. **Интеграция с Telegram**: полнофункциональный интерфейс Telegram-бота
@@ -45,7 +45,6 @@ OporaNew/
 ├── integrations/         # Внешние сервисы
 │   ├── openrouter/       # LLM-клиент
 │   ├── telegram/         # Интеграция бота
-│   └── langfuse/         # Наблюдаемость
 ├── services/             # Слой бизнес-логики
 ├── scripts/              # Утилиты миграции
 └── tests/                # Набор тестов
@@ -53,7 +52,7 @@ OporaNew/
 Хранилище: PostgreSQL
 Конфигурация: .env (те же ключи, что в SupportAssistant)
 Логирование: structlog (структурированный JSON + консоль)
-Наблюдаемость: Langfuse + логирование в БД
+Наблюдаемость: логирование в БД (agent_logs) и structlog
 ```
 
 ## Этапы реализации
@@ -89,7 +88,6 @@ OporaNew/
   - учёт использования (токены, задержка)
   - обработка ошибок с fallback
   - нормализация ID моделей
-- [x] `integrations/langfuse/client.py` — наблюдаемость:
   - context manager `trace_scope`
   - логирование generation
   - опциональность (graceful degradation)
@@ -100,7 +98,6 @@ OporaNew/
 
 **Ключевые возможности**:
 - OpenRouter с повторами (429, 500, 502, 503, 504)
-- корреляция трасс Langfuse
 - поддержка webhook/polling в Telegram
 - все ошибки логируются и корректно обрабатываются
 
@@ -140,7 +137,6 @@ OporaNew/
 - [x] `services/dialogue_service.py` — бизнес-логика:
   - `start_session()` — создание пользователя, управление сессией
   - `process_message()` — полный поток диалога
-  - интеграция trace Langfuse
   - сохранение данных в БД
 
 **Поток данных**:
@@ -239,13 +235,6 @@ LLM_EVALUATOR_MODEL=Pro/deepseek-ai/DeepSeek-V3
 LLM_EVALUATOR_TEMPERATURE=0.3
 LLM_EVALUATOR_MAX_TOKENS=200
 
-# Langfuse
-LANGFUSE_ENABLED=true
-LANGFUSE_PUBLIC_KEY=...
-LANGFUSE_SECRET_KEY=...
-LANGFUSE_BASE_URL=http://localhost:3000
-LANGFUSE_HOST=http://localhost:3000
-LANGFUSE_GENERATION_DEBUG=false
 ```
 
 ---
@@ -278,7 +267,6 @@ LANGFUSE_GENERATION_DEBUG=false
 **agent_logs**
 - детальное логирование вызовов LLM
 - промпты, ответы, задержка, токены
-- корреляция с Langfuse
 
 ---
 
@@ -314,8 +302,6 @@ LANGFUSE_GENERATION_DEBUG=false
 
 ## Наблюдаемость
 
-### Интеграция Langfuse
-
 ```python
 async with trace_scope(
     name="telegram_dialog_turn",
@@ -334,7 +320,6 @@ async with trace_scope(
 - latency_ms
 - tokens_input / tokens_output
 - статус success/error
-- `langfuse_trace_id` для корреляции
 
 ---
 
@@ -357,7 +342,6 @@ async with trace_scope(
 ### Наблюдаемость
 
 - [x] Все вызовы LLM логируются в БД
-- [x] Трассы Langfuse есть для каждого шага диалога
 - [x] Сервисные логи покрывают инфраструктуру
 - [x] Реализован трекинг ошибок
 
@@ -395,7 +379,7 @@ async with trace_scope(
 
 1. Проверить, что поведение агента совпадает с оригиналом
 2. Протестировать команды Telegram-бота
-3. Проверить трассы Langfuse
+3. Проверить трассы
 4. Проверить логи в базе данных
 
 ### Production-деплой
@@ -426,7 +410,7 @@ async with trace_scope(
 2. **Чистую архитектуру** — слоистый дизайн с четкими границами
 3. **Сохраненную логику** — 100% исходного принятия решений агентом
 4. **Конфигурацию через окружение** — все настройки вынесены наружу
-5. **Полную наблюдаемость** — логи БД + трассы Langfuse
+5. **Полную наблюдаемость** — логи БД (agent_logs) и structlog
 6. **Путь миграции** — ясная стратегия перехода с JSON на PostgreSQL
 
 Новая архитектура полностью совместима с поведением оригинальной Opora и при этом дает инфраструктуру production-уровня.

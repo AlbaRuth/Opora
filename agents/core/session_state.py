@@ -3,6 +3,12 @@ Session state DTOs for stateless therapist orchestration.
 """
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+AddressMode = Literal["formal", "informal"]
+FlowPhase = Literal["therapy", "intake", "prescreening"]
+PatientSex = Literal["male", "female", "prefer_not_to_say"]
+TherapistGender = Literal["female", "male"]
 
 
 @dataclass(slots=True)
@@ -16,20 +22,17 @@ class SessionState:
     session_counter: int
     current_therapy: str = "unspecified therapy"
     current_stage: str = ""
-    flow_phase: str = "therapy"
+    flow_phase: FlowPhase = "therapy"
     intake_user_turns: int = 0
 
     # User profile from prescreening
     therapist_name: str = "Опора"
-    therapist_gender: str = "female"
-    # NEW: Communication styles instead of traits (4 distinct styles)
+    therapist_gender: TherapistGender = "female"
     therapist_styles: list[str] = field(default_factory=list)
     patient_display_name: str = ""
     patient_age: int | None = None
-    # NEW: Patient sex for personalized responses
-    patient_sex: str = "prefer_not_to_say"
-    # NEW: Address mode for controlling formal/informal tone (ты/вы)
-    address_mode: str = "formal"
+    patient_sex: PatientSex = "prefer_not_to_say"
+    address_mode: AddressMode = "formal"
 
     @property
     def is_formal_address(self) -> bool:

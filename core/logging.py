@@ -113,4 +113,3 @@ class LogContexts:
     TELEGRAM = "opora.telegram"
     DB = "opora.db"
     LLM = "opora.llm"
-    LANGFUSE = "opora.langfuse"
