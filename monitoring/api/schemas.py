@@ -34,6 +34,7 @@ class MessageItem(BaseModel):
     role: str
     content: str
     message_number: int
+    channel: str = "telegram"
     primary_emotion: str | None = None
     emotional_intensity: float | None = None
     created_at: datetime
@@ -46,6 +47,8 @@ class TraceSummary(BaseModel):
     account_id: int | None
     channel: str
     source: str
+    sandbox_run_id: int | None = None
+    sandbox_batch_id: int | None = None
     status: str
     duration_ms: int | None
     llm_latency_ms: int
@@ -66,7 +69,11 @@ class LlmCallItem(BaseModel):
     max_tokens: int
     prompt: str | None = None
     prompt_messages: list[dict[str, Any]] | None = None
+    prompt_messages_full: list[dict[str, Any]] | None = None
     response: str | None = None
+    response_full: str | None = None
+    prompt_truncated: bool = False
+    response_truncated: bool = False
     reasoning: str | None = None
     reasoning_summary: str | None = None
     latency_ms: int | None = None
@@ -77,6 +84,10 @@ class LlmCallItem(BaseModel):
     error_message: str | None = None
     metadata: dict[str, Any] | None = None
     provider_metadata: dict[str, Any] | None = None
+    channel: str | None = None
+    source: str | None = None
+    sandbox_run_id: int | None = None
+    sandbox_batch_id: int | None = None
     created_at: datetime
 
 
@@ -124,6 +135,33 @@ class SandboxAutoRunRequest(BaseModel):
     model_overrides: ModelOverrides | None = None
 
 
+class SandboxBatchCreate(BaseModel):
+    name: str = "Sandbox batch"
+    count: int = Field(default=20, ge=1, le=100)
+    parallelism: int = Field(default=5, ge=1, le=20)
+    max_turns_per_run: int = Field(default=12, ge=1, le=20)
+    start_phase: str = Field(default="prescreening", pattern="^(prescreening|intake|therapy)$")
+    prescreening_mode: str = Field(default="ai_generated", pattern="^(manual|ai_generated)$")
+    patient_persona_source: str = Field(default="generated", pattern="^(generated|manual|legacy_template)$")
+    seed: str = ""
+    model_overrides: ModelOverrides | None = None
+
+
+class SandboxBatchResponse(BaseModel):
+    batch_id: int
+    name: str
+    status: str
+    requested_count: int
+    parallelism: int
+    max_turns_per_run: int
+    created_runs: int = 0
+    model_config: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    stop_reason: str | None = None
+
+
 class SandboxSessionResponse(BaseModel):
     run_id: int
     account_id: int
@@ -134,6 +172,8 @@ class SandboxSessionResponse(BaseModel):
     generated_prescreening_profile: dict[str, Any] | None = None
     generated_scenario: dict[str, Any] | None = None
     effective_model_config: dict[str, Any] | None = None
+    batch_id: int | None = None
+    judge_result: dict[str, Any] | None = None
 
 
 class SandboxTurnResponse(BaseModel):

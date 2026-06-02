@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.channels import CHANNEL_TELEGRAM
 from db.models import Account, Message, TherapySession, UserProfile
-from db.repositories import ConversationTraceRepository, MessageRepository
+from db.repositories import AgentLogRepository, ConversationTraceRepository, MessageRepository
 from monitoring.api.deps import db_session, require_monitor_auth
 from monitoring.api.schemas import ChatSummary, MessageItem, TraceSummary
 
@@ -123,6 +123,8 @@ async def get_chat_traces(
             account_id=trace.account_id,
             channel=trace.channel,
             source=trace.source,
+            sandbox_run_id=trace.sandbox_run_id,
+            sandbox_batch_id=trace.sandbox_batch_id,
             status=trace.status,
             duration_ms=trace.duration_ms,
             llm_latency_ms=trace.llm_latency_ms,
@@ -137,6 +139,57 @@ async def get_chat_traces(
     ]
 
 
+@router.get("/{session_id}/export")
+async def export_chat(
+    session_id: int,
+    format: str = Query(default="json", pattern="^(json|md)$"),
+    session: AsyncSession = Depends(db_session),
+):
+    chat = await get_chat(session_id, session)
+    messages = await get_chat_messages(session_id, session)
+    traces = await get_chat_traces(session_id, session)
+    log_repo = AgentLogRepository(session)
+    llm_calls = []
+    for trace in traces:
+        logs = await log_repo.get_trace_logs(trace.trace_id)
+        llm_calls.extend(
+            {
+                "id": log.id,
+                "trace_id": str(log.trace_id) if log.trace_id else None,
+                "channel": log.channel,
+                "source": log.source,
+                "sandbox_run_id": log.sandbox_run_id,
+                "sandbox_batch_id": log.sandbox_batch_id,
+                "agent_type": log.agent_type,
+                "task_name": log.task_name,
+                "model": log.model,
+                "prompt_messages": log.prompt_messages_full or log.prompt_messages,
+                "response": log.response_full or log.response,
+                "latency_ms": log.latency_ms,
+                "tokens_input": log.tokens_input,
+                "tokens_output": log.tokens_output,
+                "success": log.success,
+                "error_message": log.error_message,
+                "metadata": log.extra_metadata,
+                "provider_metadata": log.provider_metadata,
+                "created_at": log.created_at.isoformat(),
+            }
+            for log in logs
+        )
+    payload = {
+        "chat": chat.model_dump(mode="json"),
+        "messages": [message.model_dump(mode="json") for message in messages],
+        "traces": [trace.model_dump(mode="json") for trace in traces],
+        "llm_calls": llm_calls,
+    }
+    if format == "json":
+        return payload
+    return Response(
+        content=_chat_export_markdown(payload),
+        media_type="text/markdown; charset=utf-8",
+    )
+
+
 def _message_to_schema(message: Message) -> MessageItem:
     return MessageItem(
         id=message.id,
@@ -144,7 +197,47 @@ def _message_to_schema(message: Message) -> MessageItem:
         role=message.role,
         content=message.content,
         message_number=message.message_number,
+        channel=message.channel,
         primary_emotion=message.primary_emotion,
         emotional_intensity=message.emotional_intensity,
         created_at=message.created_at,
     )
+
+
+def _chat_export_markdown(payload: dict) -> str:
+    chat = payload["chat"]
+    lines = [
+        f"# Chat export: session {chat['session_id']}",
+        "",
+        f"- source: {chat['source']}",
+        f"- account_id: {chat['account_id']}",
+        f"- active: {chat['is_active']}",
+        "",
+        "## Transcript",
+    ]
+    for message in payload["messages"]:
+        lines.extend(
+            [
+                "",
+                f"### {message['message_number']}. {message['role']} ({message.get('channel', 'telegram')})",
+                message["content"],
+            ]
+        )
+    lines.extend(["", "## LLM Calls"])
+    for call in payload["llm_calls"]:
+        lines.extend(
+            [
+                "",
+                f"### {call['agent_type']}.{call['task_name']}",
+                f"- trace_id: {call['trace_id']}",
+                f"- source: {call.get('channel')}/{call.get('source')}",
+                f"- model: {call['model']}",
+                f"- latency_ms: {call.get('latency_ms')}",
+                "",
+                "Response:",
+                "```",
+                call.get("response") or "",
+                "```",
+            ]
+        )
+    return "\n".join(lines)

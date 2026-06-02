@@ -14,6 +14,7 @@ Base URL для локальной разработки: `http://127.0.0.1:8000`
 - `GET /api/chats/{session_id}`
 - `GET /api/chats/{session_id}/messages`
 - `GET /api/chats/{session_id}/traces`
+- `GET /api/chats/{session_id}/export?format=json|md`
 
 `source` берётся из `identity.accounts.origin`, а не из диапазона `telegram_id`.
 
@@ -38,6 +39,37 @@ Base URL для локальной разработки: `http://127.0.0.1:8000`
 - `GET /api/sandbox/model-config`
 
 Sandbox requests may include `model_overrides`. Overrides are scoped to run/turn and do not mutate `config/llm_models.json`.
+
+## Sandbox Batch And Export
+
+- `POST /api/sandbox/batches`
+- `GET /api/sandbox/batches/{batch_id}`
+- `GET /api/sandbox/batches/{batch_id}/runs`
+- `GET /api/sandbox/batches/{batch_id}/export?format=json|md`
+- `GET /api/sandbox/sessions/{run_id}/export?format=json|md`
+
+Batch creation payload:
+
+```json
+{
+  "name": "Sandbox batch",
+  "count": 20,
+  "parallelism": 5,
+  "max_turns_per_run": 12,
+  "start_phase": "prescreening",
+  "prescreening_mode": "ai_generated",
+  "patient_persona_source": "generated",
+  "seed": "optional",
+  "model_overrides": null
+}
+```
+
+Each batch creates independent sandbox runs, drives auto-patient intake turns, runs
+`sandbox_judge.intake_dialogue_judge`, and stores run/batch provenance in
+`observability.agent_logs` and `observability.conversation_traces`.
+
+Every exported JSON/MD payload includes transcript, generated profile/scenario,
+trace-linked LLM calls, model config, channel/source, and judge result when available.
 
 # API Documentation
 

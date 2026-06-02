@@ -190,7 +190,7 @@ Decision: хранить только provider-visible `reasoning`, `reasoning_s
 - `evaluator.assess_emotion`
 - `evaluator.update_response_strategy`
 - `evaluator.should_use_memory`
-- `evaluator.should_end_session`
+- `sandbox_judge.intake_dialogue_judge`
 - `evaluator.evaluate_therapy_progress`
 - `evaluator.determine_treatment_stage`
 - `evaluator.select_initial_therapy`

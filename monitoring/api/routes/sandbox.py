@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.llm_config import get_llm_config_resolver
-from db.repositories import PatientTemplateRepository, SandboxRunRepository, SandboxTurnRepository
+from db.repositories import (
+    AgentLogRepository,
+    PatientTemplateRepository,
+    SandboxBatchRepository,
+    SandboxRunRepository,
+    SandboxTurnRepository,
+)
 from monitoring.api.deps import db_session, require_monitor_auth
 from monitoring.api.schemas import (
     PatientTemplateResponse,
     SandboxAutoRunRequest,
+    SandboxBatchCreate,
+    SandboxBatchResponse,
     SandboxMessageRequest,
     SandboxSessionCreate,
     SandboxSessionResponse,
@@ -67,6 +75,8 @@ async def create_sandbox_session(
         generated_prescreening_profile=metadata.get("generated_prescreening_profile"),
         generated_scenario=metadata.get("generated_scenario"),
         effective_model_config=run.model_config,
+        batch_id=run.batch_id,
+        judge_result=metadata.get("judge_result"),
     )
 
 
@@ -139,6 +149,8 @@ async def stop_sandbox_session(
         generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
         generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
         effective_model_config=run.model_config,
+        batch_id=run.batch_id,
+        judge_result=(run.run_metadata or {}).get("judge_result"),
     )
 
 
@@ -191,7 +203,67 @@ async def get_sandbox_session(
         generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
         generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
         effective_model_config=run.model_config,
+        batch_id=run.batch_id,
+        judge_result=(run.run_metadata or {}).get("judge_result"),
     )
+
+
+@router.post("/batches", response_model=SandboxBatchResponse)
+async def create_sandbox_batch(
+    request: SandboxBatchCreate,
+    runner: SandboxRunner = Depends(get_runner),
+) -> SandboxBatchResponse:
+    batch = await runner.run_batch(
+        name=request.name,
+        count=request.count,
+        parallelism=request.parallelism,
+        max_turns_per_run=request.max_turns_per_run,
+        start_phase=request.start_phase,
+        prescreening_mode=request.prescreening_mode,
+        patient_persona_source=request.patient_persona_source,
+        seed=request.seed,
+        model_overrides=request.model_overrides,
+    )
+    return _batch_to_response(batch, created_runs=request.count)
+
+
+@router.get("/batches/{batch_id}", response_model=SandboxBatchResponse)
+async def get_sandbox_batch(
+    batch_id: int,
+    session: AsyncSession = Depends(db_session),
+) -> SandboxBatchResponse:
+    batch = await SandboxBatchRepository(session).get_by_id(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Sandbox batch not found")
+    runs = await SandboxRunRepository(session).list_for_batch(batch_id)
+    return _batch_to_response(batch, created_runs=len(runs))
+
+
+@router.get("/batches/{batch_id}/runs", response_model=list[SandboxSessionResponse])
+async def list_sandbox_batch_runs(
+    batch_id: int,
+    session: AsyncSession = Depends(db_session),
+) -> list[SandboxSessionResponse]:
+    batch = await SandboxBatchRepository(session).get_by_id(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Sandbox batch not found")
+    runs = await SandboxRunRepository(session).list_for_batch(batch_id)
+    return [
+        SandboxSessionResponse(
+            run_id=run.id,
+            account_id=run.account_id,
+            session_id=run.session_id,
+            status=run.status,
+            start_phase=(run.run_metadata or {}).get("start_phase"),
+            prescreening_mode=(run.run_metadata or {}).get("prescreening_mode"),
+            generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
+            generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
+            effective_model_config=run.model_config,
+            batch_id=run.batch_id,
+            judge_result=(run.run_metadata or {}).get("judge_result"),
+        )
+        for run in runs
+    ]
 
 
 @router.get("/sessions/{run_id}/turns", response_model=list[SandboxTurnResponse])
@@ -211,3 +283,159 @@ async def list_sandbox_turns(
         )
         for turn in turns
     ]
+
+
+@router.get("/sessions/{run_id}/export")
+async def export_sandbox_run(
+    run_id: int,
+    format: str = Query(default="json", pattern="^(json|md)$"),
+    session: AsyncSession = Depends(db_session),
+):
+    payload = await _sandbox_run_export_payload(run_id, session)
+    if format == "json":
+        return payload
+    return Response(
+        content=_sandbox_export_markdown(payload),
+        media_type="text/markdown; charset=utf-8",
+    )
+
+
+@router.get("/batches/{batch_id}/export")
+async def export_sandbox_batch(
+    batch_id: int,
+    format: str = Query(default="json", pattern="^(json|md)$"),
+    session: AsyncSession = Depends(db_session),
+):
+    batch = await SandboxBatchRepository(session).get_by_id(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Sandbox batch not found")
+    runs = await SandboxRunRepository(session).list_for_batch(batch_id)
+    payload = {
+        "batch": _batch_to_response(batch, created_runs=len(runs)).model_dump(mode="json"),
+        "runs": [await _sandbox_run_export_payload(run.id, session) for run in runs],
+    }
+    if format == "json":
+        return payload
+    lines = [f"# Sandbox batch export: {batch.name}", ""]
+    for run_payload in payload["runs"]:
+        lines.append(_sandbox_export_markdown(run_payload))
+        lines.append("")
+    return Response(content="\n".join(lines), media_type="text/markdown; charset=utf-8")
+
+
+def _batch_to_response(batch, *, created_runs: int) -> SandboxBatchResponse:
+    return SandboxBatchResponse(
+        batch_id=batch.id,
+        name=batch.name,
+        status=batch.status,
+        requested_count=batch.requested_count,
+        parallelism=batch.parallelism,
+        max_turns_per_run=batch.max_turns_per_run,
+        created_runs=created_runs,
+        model_config=batch.model_config,
+        metadata=batch.batch_metadata,
+        started_at=batch.started_at,
+        finished_at=batch.finished_at,
+        stop_reason=batch.stop_reason,
+    )
+
+
+async def _sandbox_run_export_payload(run_id: int, session: AsyncSession) -> dict:
+    run = await SandboxRunRepository(session).get_by_id(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Sandbox run not found")
+    turns = await SandboxTurnRepository(session).list_for_run(run_id)
+    log_repo = AgentLogRepository(session)
+    session_logs = await log_repo.get_session_logs(run.session_id)
+    llm_calls = [
+        _log_to_export(log)
+        for log in session_logs
+        if log.sandbox_run_id == run.id
+    ]
+    return {
+        "run": {
+            "run_id": run.id,
+            "batch_id": run.batch_id,
+            "account_id": run.account_id,
+            "session_id": run.session_id,
+            "status": run.status,
+            "model_config": run.model_config,
+            "metadata": run.run_metadata,
+        },
+        "turns": [
+            {
+                "turn_number": turn.turn_number,
+                "trace_id": str(turn.trace_id) if turn.trace_id else None,
+                "patient_message": turn.patient_message,
+                "assistant_message": turn.assistant_message,
+                "latency_ms": turn.latency_ms,
+                "metadata": turn.turn_metadata,
+            }
+            for turn in turns
+        ],
+        "judge_result": (run.run_metadata or {}).get("judge_result"),
+        "llm_calls": llm_calls,
+    }
+
+
+def _log_to_export(log) -> dict:
+    return {
+        "id": log.id,
+        "trace_id": str(log.trace_id) if log.trace_id else None,
+        "channel": log.channel,
+        "source": log.source,
+        "sandbox_run_id": log.sandbox_run_id,
+        "sandbox_batch_id": log.sandbox_batch_id,
+        "agent_type": log.agent_type,
+        "task_name": log.task_name,
+        "model": log.model,
+        "prompt_messages": log.prompt_messages_full or log.prompt_messages,
+        "response": log.response_full or log.response,
+        "latency_ms": log.latency_ms,
+        "tokens_input": log.tokens_input,
+        "tokens_output": log.tokens_output,
+        "success": log.success,
+        "error_message": log.error_message,
+        "metadata": log.extra_metadata,
+        "provider_metadata": log.provider_metadata,
+        "created_at": log.created_at.isoformat(),
+    }
+
+
+def _sandbox_export_markdown(payload: dict) -> str:
+    run = payload["run"]
+    lines = [
+        f"# Sandbox run export: {run['run_id']}",
+        "",
+        f"- batch_id: {run.get('batch_id')}",
+        f"- session_id: {run['session_id']}",
+        f"- status: {run['status']}",
+        "",
+        "## Transcript",
+    ]
+    for turn in payload["turns"]:
+        lines.extend(
+            [
+                "",
+                f"### Turn {turn['turn_number']}",
+                f"Patient: {turn['patient_message']}",
+                "",
+                f"Psychologist: {turn['assistant_message']}",
+            ]
+        )
+    lines.extend(["", "## Judge Result", "```json"])
+    import json
+
+    lines.append(json.dumps(payload.get("judge_result") or {}, ensure_ascii=False, indent=2))
+    lines.extend(["```", "", "## LLM Calls"])
+    for call in payload["llm_calls"]:
+        lines.extend(
+            [
+                "",
+                f"### {call['agent_type']}.{call['task_name']}",
+                f"- source: {call.get('channel')}/{call.get('source')}",
+                f"- model: {call['model']}",
+                f"- latency_ms: {call.get('latency_ms')}",
+            ]
+        )
+    return "\n".join(lines)

@@ -4,6 +4,8 @@ import type {
   MessageItem,
   ModelOverrides,
   PatientTemplate,
+  SandboxBatchCreatePayload,
+  SandboxBatchResponse,
   SandboxCreatePayload,
   SandboxSessionResponse,
   SandboxTurnResponse,
@@ -29,12 +31,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      'X-API-Key': API_TOKEN,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${await response.text()}`);
+  }
+  return response.text();
+}
+
 export const api = {
   chats: (source?: string) =>
     request<ChatSummary[]>(`/api/chats${source ? `?source=${source}` : ''}`),
   messages: (sessionId: number) => request<MessageItem[]>(`/api/chats/${sessionId}/messages`),
   traces: (sessionId: number) => request<TraceSummary[]>(`/api/chats/${sessionId}/traces`),
   traceDetail: (traceId: string) => request<TraceDetail>(`/api/traces/${traceId}`),
+  exportChat: (sessionId: number, format: 'json' | 'md') =>
+    format === 'md'
+      ? requestText(`/api/chats/${sessionId}/export?format=md`)
+      : request<Record<string, unknown>>(`/api/chats/${sessionId}/export?format=json`),
   templates: () => request<PatientTemplate[]>('/api/sandbox/templates/patients'),
   modelConfig: () => request<EffectiveModelConfig>('/api/sandbox/model-config'),
   sandboxTurns: (runId: number) =>
@@ -58,4 +76,19 @@ export const api = {
     request<SandboxSessionResponse>(`/api/sandbox/sessions/${runId}/stop`, {
       method: 'POST',
     }),
+  createSandboxBatch: (payload: SandboxBatchCreatePayload) =>
+    request<SandboxBatchResponse>('/api/sandbox/batches', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  sandboxBatchRuns: (batchId: number) =>
+    request<SandboxSessionResponse[]>(`/api/sandbox/batches/${batchId}/runs`),
+  exportSandboxRun: (runId: number, format: 'json' | 'md') =>
+    format === 'md'
+      ? requestText(`/api/sandbox/sessions/${runId}/export?format=md`)
+      : request<Record<string, unknown>>(`/api/sandbox/sessions/${runId}/export?format=json`),
+  exportSandboxBatch: (batchId: number, format: 'json' | 'md') =>
+    format === 'md'
+      ? requestText(`/api/sandbox/batches/${batchId}/export?format=md`)
+      : request<Record<string, unknown>>(`/api/sandbox/batches/${batchId}/export?format=json`),
 };

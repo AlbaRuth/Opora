@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from db.models import PatientTemplateModel, SandboxRun, SandboxTurn
+from db.models import PatientTemplateModel, SandboxBatch, SandboxRun, SandboxTurn
 from monitoring.sandbox.domain import PatientTemplate
 
 from .base import BaseRepository
@@ -63,6 +63,54 @@ class PatientTemplateRepository(BaseRepository[PatientTemplateModel]):
         )
 
 
+class SandboxBatchRepository(BaseRepository[SandboxBatch]):
+    """Persistence for sandbox batch runs."""
+
+    def __init__(self, session: AsyncSession):
+        super().__init__(session, SandboxBatch)
+
+    async def create_batch(
+        self,
+        *,
+        name: str,
+        requested_count: int,
+        parallelism: int,
+        max_turns_per_run: int,
+        model_config: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SandboxBatch:
+        return await self.create(
+            name=name,
+            status="running",
+            requested_count=requested_count,
+            parallelism=parallelism,
+            max_turns_per_run=max_turns_per_run,
+            model_config=model_config,
+            batch_metadata=metadata,
+            started_at=datetime.now(timezone.utc),
+        )
+
+    async def finish(
+        self,
+        batch_id: int,
+        *,
+        status: str = "completed",
+        stop_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SandboxBatch | None:
+        batch = await self.get_by_id(batch_id)
+        if not batch:
+            return None
+        updates: dict[str, Any] = {
+            "status": status,
+            "finished_at": datetime.now(timezone.utc),
+            "stop_reason": stop_reason,
+        }
+        if metadata is not None:
+            updates["batch_metadata"] = metadata
+        return await self.update(batch, **updates)
+
+
 class SandboxRunRepository(BaseRepository[SandboxRun]):
     """Persistence for sandbox runs."""
 
@@ -76,6 +124,7 @@ class SandboxRunRepository(BaseRepository[SandboxRun]):
         session_id: int,
         name: str,
         patient_template_id: int | None = None,
+        batch_id: int | None = None,
         model_config: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> SandboxRun:
@@ -83,6 +132,7 @@ class SandboxRunRepository(BaseRepository[SandboxRun]):
             account_id=account_id,
             session_id=session_id,
             patient_template_id=patient_template_id,
+            batch_id=batch_id,
             name=name,
             status="active",
             model_config=model_config,
@@ -99,6 +149,14 @@ class SandboxRunRepository(BaseRepository[SandboxRun]):
             stopped_at=datetime.now(timezone.utc),
             stop_reason=reason,
         )
+
+    async def list_for_batch(self, batch_id: int) -> list[SandboxRun]:
+        result = await self.session.execute(
+            select(SandboxRun)
+            .where(SandboxRun.batch_id == batch_id)
+            .order_by(SandboxRun.id)
+        )
+        return result.scalars().all()
 
 
 class SandboxTurnRepository(BaseRepository[SandboxTurn]):

@@ -18,6 +18,7 @@ export type MessageItem = {
   role: 'patient' | 'doctor';
   content: string;
   message_number: number;
+  channel: 'telegram' | 'sandbox';
   primary_emotion?: string | null;
   emotional_intensity?: number | null;
   created_at: string;
@@ -31,6 +32,8 @@ export type TraceSummary = {
   status: string;
   channel: string;
   source: string;
+  sandbox_run_id?: number | null;
+  sandbox_batch_id?: number | null;
   duration_ms?: number | null;
   llm_latency_ms: number;
   total_tokens_input: number;
@@ -50,7 +53,11 @@ export type LlmCallItem = {
   max_tokens: number;
   prompt?: string | null;
   prompt_messages?: Array<Record<string, string>> | null;
+  prompt_messages_full?: Array<Record<string, string>> | null;
   response?: string | null;
+  response_full?: string | null;
+  prompt_truncated: boolean;
+  response_truncated: boolean;
   reasoning?: string | null;
   reasoning_summary?: string | null;
   latency_ms?: number | null;
@@ -61,6 +68,10 @@ export type LlmCallItem = {
   error_message?: string | null;
   metadata?: Record<string, unknown> | null;
   provider_metadata?: Record<string, unknown> | null;
+  channel?: string | null;
+  source?: string | null;
+  sandbox_run_id?: number | null;
+  sandbox_batch_id?: number | null;
   created_at: string;
 };
 
@@ -98,6 +109,8 @@ export type SandboxSessionResponse = {
   generated_prescreening_profile?: Record<string, unknown> | null;
   generated_scenario?: Record<string, unknown> | null;
   effective_model_config?: EffectiveModelConfig | null;
+  batch_id?: number | null;
+  judge_result?: Record<string, unknown> | null;
 };
 
 export type SandboxPrescreeningProfile = {
@@ -129,6 +142,33 @@ export type SandboxTurnResponse = {
   assistant_message: string;
   latency_ms?: number | null;
   metadata?: Record<string, unknown> | null;
+};
+
+export type SandboxBatchCreatePayload = {
+  name: string;
+  count: number;
+  parallelism: number;
+  max_turns_per_run: number;
+  start_phase: 'prescreening' | 'intake' | 'therapy';
+  prescreening_mode: 'manual' | 'ai_generated';
+  patient_persona_source: 'generated' | 'manual' | 'legacy_template';
+  seed?: string;
+  model_overrides?: ModelOverrides;
+};
+
+export type SandboxBatchResponse = {
+  batch_id: number;
+  name: string;
+  status: string;
+  requested_count: number;
+  parallelism: number;
+  max_turns_per_run: number;
+  created_runs: number;
+  model_config?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  stop_reason?: string | null;
 };
 
 export type PatientTemplate = {

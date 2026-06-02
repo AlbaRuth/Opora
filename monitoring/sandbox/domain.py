@@ -26,6 +26,7 @@ class SandboxSessionSpec:
     """Sandbox session creation data independent from HTTP schemas."""
 
     name: str = "Sandbox run"
+    batch_id: int | None = None
     patient_template_id: int | None = None
     start_phase: str = "intake"
     prescreening_mode: str = "manual"

@@ -31,8 +31,8 @@ def test_load_llm_config_merges_defaults_for_all_agent_tasks(tmp_path):
                     "therapist": {
                         "generate_response": {"max_tokens": 300},
                     },
-                    "evaluator": {
-                        "should_end_session": {"temperature": 0.0, "max_tokens": 5},
+                    "sandbox_judge": {
+                        "intake_dialogue_judge": {"temperature": 0.1, "max_tokens": 2000},
                     },
                 },
             },
@@ -45,14 +45,14 @@ def test_load_llm_config_merges_defaults_for_all_agent_tasks(tmp_path):
     resolver = LlmConfigResolver(config)
 
     therapist = resolver.resolve("therapist", "generate_response")
-    evaluator = resolver.resolve("evaluator", "should_end_session")
+    judge = resolver.resolve("sandbox_judge", "intake_dialogue_judge")
 
     assert therapist.model == "google/gemma-4-26b-a4b-it:nitro"
     assert therapist.temperature == 0.2
     assert therapist.max_tokens == 300
     assert therapist.top_p == 0.9
-    assert evaluator.temperature == 0.0
-    assert evaluator.max_tokens == 5
+    assert judge.temperature == 0.1
+    assert judge.max_tokens == 2000
 
 
 def test_resolver_applies_scoped_sandbox_override(tmp_path):

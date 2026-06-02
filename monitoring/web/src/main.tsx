@@ -13,6 +13,7 @@ import type {
   MessageItem,
   ModelOverrides,
   PatientTemplate,
+  SandboxBatchResponse,
   SandboxPrescreeningProfile,
   SandboxSessionResponse,
   SandboxTurnResponse,
@@ -34,12 +35,15 @@ function App() {
   const [aiPrescreeningSeed, setAiPrescreeningSeed] = useState('');
   const [scenarioSeed, setScenarioSeed] = useState('');
   const [autoRunTurns, setAutoRunTurns] = useState(3);
+  const [batchCount, setBatchCount] = useState(20);
+  const [batchParallelism, setBatchParallelism] = useState(5);
+  const [sandboxBatch, setSandboxBatch] = useState<SandboxBatchResponse | null>(null);
   const [manualProfile, setManualProfile] = useState<SandboxPrescreeningProfile>({
-    patient_name: 'Sandbox Пациент',
+    patient_name: 'Sandbox Patient',
     patient_age: 32,
     patient_sex: 'prefer_not_to_say',
     address_mode: 'formal',
-    therapist_name: 'Опора',
+    therapist_name: 'Opora',
     therapist_gender: 'female',
     therapist_styles: ['friendly'],
   });
@@ -159,6 +163,59 @@ function App() {
     }
   }
 
+  async function createSandboxBatch() {
+    setSandboxBusy(true);
+    setError(null);
+    try {
+      const batch = await api.createSandboxBatch({
+        name: 'UI sandbox batch',
+        count: batchCount,
+        parallelism: batchParallelism,
+        max_turns_per_run: autoRunTurns,
+        start_phase: sandboxStartPhase,
+        prescreening_mode: 'ai_generated',
+        patient_persona_source: 'generated',
+        seed: aiPrescreeningSeed || scenarioSeed,
+        model_overrides: currentOverrides(),
+      });
+      setSandboxBatch(batch);
+      const runs = await api.sandboxBatchRuns(batch.batch_id);
+      if (runs[0]) {
+        setSandbox(runs[0]);
+        setSandboxTurns(await api.sandboxTurns(runs[0].run_id));
+      }
+      setSource('sandbox');
+      await loadChats('sandbox');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  }
+
+  async function exportCurrentRun(format: 'json' | 'md') {
+    if (!sandbox) return;
+    const data = await api.exportSandboxRun(sandbox.run_id, format);
+    downloadExport(`sandbox-run-${sandbox.run_id}.${format}`, data, format);
+  }
+
+  async function exportCurrentBatch(format: 'json' | 'md') {
+    if (!sandboxBatch) return;
+    const data = await api.exportSandboxBatch(sandboxBatch.batch_id, format);
+    downloadExport(`sandbox-batch-${sandboxBatch.batch_id}.${format}`, data, format);
+  }
+
+  function downloadExport(filename: string, data: unknown, format: 'json' | 'md') {
+    const body = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    const blob = new Blob([body], { type: format === 'md' ? 'text/markdown' : 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function stopSandbox() {
     if (!sandbox) return;
     setSandboxBusy(true);
@@ -258,6 +315,9 @@ function App() {
           aiPrescreeningSeed={aiPrescreeningSeed}
           scenarioSeed={scenarioSeed}
           autoRunTurns={autoRunTurns}
+          batchCount={batchCount}
+          batchParallelism={batchParallelism}
+          sandboxBatch={sandboxBatch}
           sandbox={sandbox}
           sandboxMessage={sandboxMessage}
           sandboxTurns={sandboxTurns}
@@ -272,12 +332,17 @@ function App() {
           onAiPrescreeningSeedChange={setAiPrescreeningSeed}
           onScenarioSeedChange={setScenarioSeed}
           onAutoRunTurnsChange={setAutoRunTurns}
+          onBatchCountChange={setBatchCount}
+          onBatchParallelismChange={setBatchParallelism}
           onMessageChange={setSandboxMessage}
           onCreate={createSandbox}
+          onCreateBatch={createSandboxBatch}
           onSend={sendSandbox}
           onAutoRun={runAutoPatient}
           onStop={stopSandbox}
           onRefreshTurns={refreshSandboxTurns}
+          onExportRun={exportCurrentRun}
+          onExportBatch={exportCurrentBatch}
           onOpenTrace={selectTrace}
           onModelTaskChange={changeModelTask}
           onDraftModelChange={setDraftModelConfig}

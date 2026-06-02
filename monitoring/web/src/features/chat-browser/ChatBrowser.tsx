@@ -26,16 +26,16 @@ export function ChatBrowser({
       <div className="header">
         <div>
           <h1>Opora Monitor</h1>
-          <small>Telegram и Sandbox раздельно, один trace view</small>
+          <small>Telegram and Sandbox separated, one trace view</small>
         </div>
         <button onClick={onRefresh} disabled={loading}>
-          {loading ? '...' : 'Обновить'}
+          {loading ? '...' : 'Refresh'}
         </button>
       </div>
       <label>
-        Источник
+        Source
         <select value={source} onChange={(event) => onSourceChange(event.target.value)}>
-          <option value="">Все</option>
+          <option value="">All</option>
           <option value="telegram">Telegram</option>
           <option value="sandbox">Sandbox</option>
         </select>
@@ -49,11 +49,11 @@ export function ChatBrowser({
             onClick={() => onSelect(chat)}
           >
             <strong>{chat.display_name || chat.username || chat.telegram_id}</strong>
-            <span>{chat.source} · session #{chat.session_number}</span>
-            <small>{chat.dialog_count} turns · {chat.therapy_type}</small>
+            <span>{chat.source} / session #{chat.session_number}</span>
+            <small>{chat.dialog_count} turns / {chat.therapy_type}</small>
           </button>
         ))}
-        {!loading && chats.length === 0 && <p className="muted">Чатов пока нет.</p>}
+        {!loading && chats.length === 0 && <p className="muted">No chats yet.</p>}
       </div>
     </section>
   );

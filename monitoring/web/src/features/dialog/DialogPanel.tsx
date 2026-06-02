@@ -10,15 +10,15 @@ export function DialogPanel({ selectedChat, messages, loading }: Props) {
   return (
     <section className="panel dialogPanel">
       <div className="panelHeader">
-        <h2>Диалог</h2>
-        {selectedChat && <small>{selectedChat.source} · session #{selectedChat.session_number}</small>}
+        <h2>Dialog</h2>
+        {selectedChat && <small>{selectedChat.source} / session #{selectedChat.session_number}</small>}
       </div>
-      {!selectedChat && <p className="muted">Выберите чат слева.</p>}
-      {loading && <p className="muted">Загружаю сообщения...</p>}
+      {!selectedChat && <p className="muted">Select a chat on the left.</p>}
+      {loading && <p className="muted">Loading messages...</p>}
       {messages.map((message) => (
         <article key={message.id} className={`message ${message.role}`}>
           <div>
-            <strong>{message.role === 'patient' ? 'Пациент' : 'Модель'}</strong>
+            <strong>{message.role === 'patient' ? 'Patient' : 'Model'}</strong>
             <span>#{message.message_number}</span>
           </div>
           <p>{message.content}</p>
