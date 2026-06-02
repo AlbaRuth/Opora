@@ -3,6 +3,7 @@
 ################################################################################
 .env
 .env.local
+.env.*
 .env.*.local
 .env.backup
 !.env.example
@@ -75,9 +76,22 @@ logs/
 *.log
 tmp/
 temp/
+exports/
+monitoring/exports/
+monitoring/traces/
 *.db
 *.sqlite
 *.sqlite3
+
+################################################################################
+# Node / React monitor UI
+################################################################################
+node_modules/
+monitoring/web/node_modules/
+monitoring/web/dist/
+monitoring/web/.vite/
+*.tsbuildinfo
+!monitoring/web/package-lock.json
 
 ################################################################################
 # Инструменты и IDE
