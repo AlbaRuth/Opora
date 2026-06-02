@@ -44,7 +44,7 @@ class DialogueSignalResult(BaseModel):
     pushback_type: Literal["none", "stage", "hard_stop"] = "none"
     advice_request: bool = False
     question_stop: bool = False
-    session_end_intent: bool = False
+    farewell_intent: bool = False
     active_style: str = "friendly"
     recommended_response_mode: Literal[
         "hold_space",

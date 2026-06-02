@@ -20,7 +20,7 @@ Analyzes the patient message and recent context. Returns:
   "pushback_type": "none",
   "advice_request": false,
   "question_stop": false,
-  "session_end_intent": false,
+  "farewell_intent": false,
   "active_style": "soft",
   "recommended_response_mode": "gentle_explore",
   "question_guidance": "encourage",
@@ -29,8 +29,9 @@ Analyzes the patient message and recent context. Returns:
 }
 ```
 
-`IntakeResponsePolicy` maps this result to prompt directives. It does not inspect the
-patient text.
+`farewell_intent` is a tone signal only. It must never close, expire, replace, or reset
+the DB session. `IntakeResponsePolicy` maps this result to prompt directives. It does
+not inspect the patient text.
 
 ### `intake.intake_turn`
 
@@ -64,6 +65,25 @@ prescreening profile, clinical card, generated scenario, and recent conversation
 All LLM tasks go through `LlmGateway`. Logs include `prompt_messages`,
 `prompt_variables`, `generation_params`, `config_source`, response text, provider
 metadata, latency, tokens, and trace linkage.
+
+Sandbox traces store full prompt/response payloads in `prompt_messages_full` and
+`response_full`, while preview fields may still be truncated. Every LLM call records
+`channel` and `source`; sandbox calls also record `sandbox_run_id` and, when relevant,
+`sandbox_batch_id`.
+
+### `sandbox_judge.intake_dialogue_judge`
+
+Evaluates completed sandbox intake runs. It receives the transcript, generated profile,
+generated scenario, trace summaries, and LLM call metadata. It returns JSON with
+therapist quality, contextuality, psychologist liveness, architecture bottlenecks,
+latency notes, diversity notes, and recommended fixes.
+
+## Conversation Continuity
+
+The base therapist and intake system prompts include `CONVERSATION CONTINUITY AND
+PAUSES`. The model must treat goodbye, silence, and long delays as pauses in the
+conversation, not as session-ending events. If the patient says goodbye, the model
+closes the current turn warmly and waits for the user to return.
 
 ## Versioning
 

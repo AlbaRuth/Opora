@@ -127,8 +127,8 @@
   <text x="840" y="655" class="body">Output: JSON {strategy, strategy_text}</text>
 
   <rect x="1080" y="460" width="250" height="180" rx="14" ry="14" class="box-orange"/>
-  <text x="1100" y="490" class="h2">SESSION_END</text>
-  <text x="1100" y="520" class="body">Method: should_end_session()</text>
+  <text x="1100" y="490" class="h2">FAREWELL_INTENT</text>
+  <text x="1100" y="520" class="body">Method: should_end_farewell_intent()</text>
   <text x="1100" y="545" class="body">Purpose: detect explicit wish</text>
   <text x="1100" y="565" class="body">to end the dialogue.</text>
   <text x="1100" y="600" class="body">Output: Boolean True / False</text>
@@ -206,7 +206,7 @@
   <text x="1660" y="1080" class="body">greeting</text>
   <text x="1660" y="1115" class="body">process_patient_input(): evaluator chain,</text>
   <text x="1660" y="1135" class="body">final prompt, OpenRouterClient,</text>
-  <text x="1660" y="1155" class="body">therapist_response + session_ended</text>
+  <text x="1660" y="1155" class="body">therapist_response + FAREWELL_INTENTed</text>
 
   <rect x="2040" y="180" width="260" height="60" rx="14" ry="14" class="box-gray"/>
   <text x="2170" y="218" text-anchor="middle" class="h1">Storage / Observability</text>
@@ -243,7 +243,7 @@
   <rect x="20" y="1470" width="2280" height="120" rx="14" ry="14" class="box-purple"/>
   <text x="40" y="1500" class="h2">Therapy flow</text>
   <text x="40" y="1528" class="body">DialogueService.process_message() -> save patient message -> TherapistAgent.process_patient_input() -> evaluator chain:</text>
-  <text x="40" y="1548" class="body">SESSION_END + CLIENT_REACTION + EMOTION_ASSESSMENT + MEMORY_USAGE + TREATMENT_STAGE + get_strategy_prompt()</text>
+  <text x="40" y="1548" class="body">FAREWELL_INTENT + CLIENT_REACTION + EMOTION_ASSESSMENT + MEMORY_USAGE + TREATMENT_STAGE + get_strategy_prompt()</text>
   <text x="40" y="1568" class="body">-> TherapistPrompts.get_system_message + get_response_prompt -> LLM -> therapist_response -> decision_logs / agent_logs</text>
 
   <path d="M300 300 L340 300" class="arrow-blue"/>
@@ -280,3 +280,4 @@
   <path d="M1340 1015 L2040 520" class="arrow-gray"/>
   <text x="1660" y="930" class="small">therapy_type / reason</text>
 </svg>
+

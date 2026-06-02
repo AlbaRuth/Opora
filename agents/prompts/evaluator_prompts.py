@@ -143,12 +143,12 @@ Only when you can find places in the historical conversations that are clearly r
 Directly output your answer in Russian. Do not include any other analysis or explanation.
 """
 
-    # Session end assessment prompt (original lines 360-369)
-    SESSION_END = """##Role:
+    # Farewell intent assessment prompt (non-closing signal only)
+    FAREWELL_INTENT = """##Role:
 You are a professional and empathetic psychological counselor. 
 ##Requirements:
-Your task is to strictly judge whether the current session should be ended based on the patient's current words: {patient_input}.
-Only when the patient expresses a clear intention to end (such as saying "goodbye", "that's all for today", "we'll talk next time", etc.), return True. Otherwise return False.
+Your task is to strictly judge whether the patient's current words express a temporary pause, goodbye, or wish to stop for now: {patient_input}.
+Only when the patient clearly signals a pause or goodbye, return True. Otherwise return False.
 ##Constraints:
 Strictly output a Boolean value True or False.   
 """

@@ -13,22 +13,31 @@ class CreatedSession:
     session_number: int
     flow_phase: str
     card_filled: bool
+    created_new: bool = True
 
 
-async def create_or_replace_active_session(
+async def get_or_create_active_session(
     *,
     account_id: int,
     intake_enabled: bool,
     session,
 ) -> CreatedSession:
-    """Close old active session and create a new one via a single canonical path."""
+    """Return the active session or create one without closing prior context."""
     session_repo = SessionRepository(session)
     intake_repo = IntakeStateRepository(session)
     clinical_repo = ClinicalProfileRepository(session)
 
     active_session = await session_repo.get_active_session(account_id)
     if active_session:
-        await session_repo.end_session(active_session.id)
+        intake_state = await intake_repo.get_by_session_id(active_session.id)
+        card_filled = await clinical_repo.is_card_filled(account_id)
+        return CreatedSession(
+            session_id=active_session.id,
+            session_number=active_session.session_number,
+            flow_phase=(intake_state.flow_phase if intake_state else "therapy"),
+            card_filled=card_filled,
+            created_new=False,
+        )
 
     latest_session = await session_repo.get_latest_session(account_id)
     new_session_number = (latest_session.session_number + 1) if latest_session else 1
@@ -49,5 +58,20 @@ async def create_or_replace_active_session(
         session_number=new_session_number,
         flow_phase=flow_phase,
         card_filled=card_filled,
+        created_new=True,
+    )
+
+
+async def create_or_replace_active_session(
+    *,
+    account_id: int,
+    intake_enabled: bool,
+    session,
+) -> CreatedSession:
+    """Deprecated compatibility wrapper. It no longer closes active sessions."""
+    return await get_or_create_active_session(
+        account_id=account_id,
+        intake_enabled=intake_enabled,
+        session=session,
     )
 

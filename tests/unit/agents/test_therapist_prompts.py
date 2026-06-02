@@ -63,6 +63,14 @@ class TestTherapistPromptsPersonalization:
         assert "patient's message" in message.lower() or "patient's input" in message.lower()
         assert "Detect the language" in message or "detect the language" in message.lower()
 
+    def test_get_system_message_conversation_continuity(self):
+        """Test system message forbids automatic session closure."""
+        message = TherapistPrompts.get_system_message()
+
+        assert "CONVERSATION CONTINUITY AND PAUSES" in message
+        assert "Never decide that the session is finished" in message
+        assert "start over" in message
+
     def test_get_response_prompt_default(self):
         """Test response prompt with default values."""
         prompt = TherapistPrompts.get_response_prompt(

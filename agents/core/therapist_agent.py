@@ -167,7 +167,6 @@ class TherapistAgent:
             therapist_styles=state.therapist_styles,
             current_phase="therapy",
         )
-        should_end = signal.session_end_intent
         is_rejecting = (
             signal.pushback_type != "none"
             or signal.advice_request
@@ -279,7 +278,7 @@ class TherapistAgent:
         
         return {
             "therapist_response": response,
-            "session_ended": should_end,
+            "session_ended": False,
             "current_therapy": state.current_therapy,
             "strategy": strategy,
         }

@@ -255,25 +255,16 @@ class TherapistEvaluator:
         
         return response if response else "No need to consider historical conversation memory"
     
-    async def should_end_session(
+    async def should_end_farewell_intent(
         self,
         patient_input: str,
         dialog_count: int,
         user_id: int,
         session_id: int | None = None,
     ) -> bool:
-        """
-        Determine if session should end.
-        Original logic from evaluation.py lines 360-372.
-        """
-        _ = dialog_count
-        signal = await self.signal_analyzer.analyze(
-            patient_message=patient_input,
-            account_id=user_id,
-            session_id=session_id,
-            current_phase="therapy",
-        )
-        return signal.session_end_intent
+        """Deprecated: sessions are not closed automatically from dialogue content."""
+        _ = (patient_input, dialog_count, user_id, session_id)
+        return False
     
     async def evaluate_therapy_progress(
         self,

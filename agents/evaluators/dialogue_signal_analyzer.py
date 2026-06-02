@@ -33,7 +33,8 @@ Decision criteria:
   inability to stay safe, or similarly urgent risk.
 - pushback_type: "stage" when the patient resists intake pacing, asks to skip questions, or asks
   for advice before enough context; "hard_stop" when they clearly refuse more questions now.
-- session_end_intent: true only when the patient clearly intends to end the conversation now.
+- farewell_intent: true when the patient says goodbye, thanks the counselor, needs to leave,
+  or wants to pause for now. This is only a tone signal; it must never close or expire a session.
 - question_guidance: "defer" for crisis, hard stop, or strong stage pushback; otherwise
   "encourage" when intake card gaps remain; otherwise "optional".
 - recommended_response_mode: choose hold_space, gentle_explore, or structured_gather.
@@ -46,7 +47,7 @@ Output schema:
   "pushback_type": "none",
   "advice_request": false,
   "question_stop": false,
-  "session_end_intent": false,
+  "farewell_intent": false,
   "active_style": "friendly",
   "recommended_response_mode": "gentle_explore",
   "question_guidance": "encourage",

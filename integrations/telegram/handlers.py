@@ -277,9 +277,3 @@ async def handle_message(message: types.Message, dialogue_service: DialogueServi
     )
 
     await message.answer(result["response"])
-
-    if result.get("session_ended"):
-        logger.info(
-            "session_ended_by_agent",
-            user_id=message.from_user.id,
-        )

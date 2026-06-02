@@ -25,7 +25,7 @@ from db.repositories import (
 from db.session import get_db_session
 from observability.tracing import TraceContext, get_current_trace, trace_scope
 from services.prescreening_gate import evaluate_prescreening_gate
-from services.session_lifecycle import create_or_replace_active_session
+from services.session_lifecycle import get_or_create_active_session
 from services.session_state_builder import build_session_state
 from services.user_context import load_user_context
 
@@ -132,7 +132,7 @@ class DialogueService:
             current_trace = get_current_trace()
             if current_trace:
                 current_trace.account_id = context.account_id
-            created = await create_or_replace_active_session(
+            created = await get_or_create_active_session(
                 account_id=context.account_id,
                 intake_enabled=self.settings.intake_enabled,
                 session=session,
@@ -145,6 +145,21 @@ class DialogueService:
                 session_number=created.session_number,
                 session_db_id=created.session_id,
                 flow_phase=created.flow_phase,
+            )
+
+        if not created.created_new:
+            if created.flow_phase == "intake":
+                return build_intake_start_message(
+                    context.patient_display_name,
+                    context.address_mode,
+                    context.therapist_gender,
+                    self.settings.intake_min_user_turns,
+                    self.settings.intake_max_user_turns,
+                )
+            return build_welcome_back_message(
+                context.patient_display_name,
+                context.address_mode,
+                context.therapist_gender,
             )
 
         if created.flow_phase == "intake":
@@ -188,7 +203,7 @@ class DialogueService:
             gate = await evaluate_prescreening_gate(telegram_id, session)
             if not gate.account_exists or not gate.is_complete or gate.account_id is None:
                 return False
-            await create_or_replace_active_session(
+            await get_or_create_active_session(
                 account_id=gate.account_id,
                 intake_enabled=self.settings.intake_enabled,
                 session=session,
@@ -390,19 +405,16 @@ class DialogueService:
                     stage=state.current_stage,
                 )
 
-            if result.get("session_ended"):
-                await session_repo.end_session(active_session.id)
-
             logger.info(
                 "message_processed",
                 account_id=account_id,
                 session_id=active_session.id,
-                session_ended=result.get("session_ended", False),
+                session_ended=False,
             )
 
             return {
                 "response": result["therapist_response"],
-                "session_ended": result.get("session_ended", False),
+                "session_ended": False,
                 "strategy": result.get("strategy", {}),
             }
 
