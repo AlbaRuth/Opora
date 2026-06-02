@@ -5,6 +5,7 @@ Decision log model for agent decisions.
 from typing import Any, Optional, TYPE_CHECKING
 
 from sqlalchemy import BigInteger, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -26,6 +27,7 @@ class DecisionLog(Base, TimestampMixin):
         index=True,
     )
     response_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
 
     # Decision data (denormalized for quick access)
     memory_invoke_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

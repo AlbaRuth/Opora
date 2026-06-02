@@ -4,7 +4,8 @@ Agent execution log model for observability.
 
 from typing import Any, Optional, TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Float, ForeignKey, Integer, JSON, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -46,14 +47,20 @@ class AgentLog(Base, TimestampMixin):
     max_tokens: Mapped[int] = mapped_column(Integer, default=150)
 
     # Request/Response
+    trace_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
+    turn_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
+    channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prompt_messages: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
     response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reasoning_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Performance metrics
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tokens_input: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tokens_output: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 8), nullable=True)
 
     # Outcome
     success: Mapped[bool] = mapped_column(default=True)
@@ -63,6 +70,7 @@ class AgentLog(Base, TimestampMixin):
     extra_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(
         "metadata", JSON, nullable=True
     )
+    provider_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     account: Mapped["Account"] = relationship(

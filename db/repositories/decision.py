@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from db.models import DecisionLog
+from observability.tracing import get_current_trace
+
 from .base import BaseRepository
 
 
@@ -31,11 +33,16 @@ class DecisionLogRepository(BaseRepository[DecisionLog]):
         strategy_description: str | None = None,
         patient_attitude: str | None = None,
         decision_snapshot: dict[str, Any] | None = None,
+        trace_id: str | None = None,
     ) -> DecisionLog:
         """Log agent decision for response."""
+        current_trace = get_current_trace()
+        if current_trace:
+            trace_id = trace_id or str(current_trace.trace_id)
         return await self.create(
             session_id=session_id,
             response_number=response_number,
+            trace_id=trace_id,
             memory_invoke_result=memory_invoke_result,
             is_rejecting=is_rejecting,
             current_therapy=current_therapy,

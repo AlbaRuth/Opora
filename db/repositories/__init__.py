@@ -25,6 +25,8 @@ from .intake_state import IntakeStateRepository
 from .message import MessageRepository
 from .decision import DecisionLogRepository
 from .agent_log import AgentLogRepository
+from .conversation_trace import ConversationTraceRepository
+from .sandbox import PatientTemplateRepository, SandboxRunRepository, SandboxTurnRepository
 
 __all__ = [
     # Base
@@ -40,4 +42,8 @@ __all__ = [
     "MessageRepository",
     "DecisionLogRepository",
     "AgentLogRepository",
+    "ConversationTraceRepository",
+    "PatientTemplateRepository",
+    "SandboxRunRepository",
+    "SandboxTurnRepository",
 ]

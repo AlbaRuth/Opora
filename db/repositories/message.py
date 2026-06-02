@@ -7,6 +7,8 @@ from sqlalchemy.future import select
 from sqlalchemy import desc
 
 from db.models import Message
+from observability.tracing import get_current_trace
+
 from .base import BaseRepository
 
 
@@ -24,13 +26,18 @@ class MessageRepository(BaseRepository[Message]):
         message_number: int,
         primary_emotion: str | None = None,
         emotional_intensity: float | None = None,
+        trace_id: str | None = None,
     ) -> Message:
         """Create new message in session."""
+        current_trace = get_current_trace()
+        if current_trace:
+            trace_id = trace_id or str(current_trace.trace_id)
         return await self.create(
             session_id=session_id,
             role=role,
             content=content,
             message_number=message_number,
+            trace_id=trace_id,
             primary_emotion=primary_emotion,
             emotional_intensity=emotional_intensity,
         )

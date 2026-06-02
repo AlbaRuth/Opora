@@ -29,6 +29,10 @@ from .decision_log import DecisionLog
 
 # Observability schema
 from .agent_log import AgentLog
+from .conversation_trace import ConversationTrace
+from .patient_template import PatientTemplateModel
+from .sandbox_run import SandboxRun
+from .sandbox_turn import SandboxTurn
 
 __all__ = [
     # Base
@@ -49,4 +53,8 @@ __all__ = [
     "DecisionLog",
     # Observability
     "AgentLog",
+    "ConversationTrace",
+    "PatientTemplateModel",
+    "SandboxRun",
+    "SandboxTurn",
 ]

@@ -5,6 +5,7 @@ Message model for therapy sessions.
 from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import BigInteger, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -30,6 +31,7 @@ class Message(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # "patient" or "doctor"
     content: Mapped[str] = mapped_column(Text, nullable=False)
     message_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    trace_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
 
     # Optional emotional analysis (cached)
     primary_emotion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
