@@ -69,7 +69,6 @@ class TestDialogueServiceAsyncContract:
         mock_agent,
         db_session,
         patch_get_db_session,
-        dialogue_langfuse_stub,
     ):
         patch_get_db_session("services.dialogue_service")
         account = await create_account_with_prescreening(
@@ -106,7 +105,6 @@ class TestDialogueServiceAsyncContract:
         mock_agent,
         db_session,
         patch_get_db_session,
-        dialogue_langfuse_stub,
     ):
         patch_get_db_session("services.dialogue_service")
         account = await create_account_with_prescreening(

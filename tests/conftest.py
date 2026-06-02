@@ -24,7 +24,6 @@ os.environ.setdefault(
 )
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test_token")
 os.environ.setdefault("OPENROUTER_API_KEY", "test_key")
-os.environ.setdefault("LANGFUSE_ENABLED", "false")
 os.environ.setdefault("INTAKE_ENABLED", "false")
 
 # Import SessionState directly from file to avoid full app import chain
@@ -96,26 +95,6 @@ async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
             yield session
         await trans.rollback()
-
-
-@pytest.fixture
-def dialogue_langfuse_stub(monkeypatch):
-    """Avoid Langfuse/network during DialogueService.process_message tests."""
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def _trace(*args, **kwargs):
-        class _T:
-            pass
-
-        yield _T()
-
-    class _LF:
-        def update_trace(self, *a, **k):
-            return None
-
-    monkeypatch.setattr("services.dialogue_service.trace_scope", _trace)
-    monkeypatch.setattr("services.dialogue_service.LangfuseClient", lambda: _LF())
 
 
 @pytest.fixture

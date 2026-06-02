@@ -52,7 +52,6 @@ class TestDialogueServiceIntake:
         self,
         db_session,
         patch_get_db_session,
-        dialogue_langfuse_stub,
         monkeypatch,
     ):
         patch_get_db_session("services.dialogue_service")
@@ -137,7 +136,6 @@ class TestDialogueServiceIntake:
         self,
         db_session,
         patch_get_db_session,
-        dialogue_langfuse_stub,
         monkeypatch,
     ):
         """Test that intake transitions to therapy when max turns reached with insufficient data."""

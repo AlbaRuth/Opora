@@ -99,7 +99,6 @@ class TestDialogueServicePrescreening:
         self,
         db_session,
         patch_get_db_session,
-        dialogue_langfuse_stub,
     ):
         from services.dialogue_service import DialogueService
         from tests.factories import create_active_therapy_session
