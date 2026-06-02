@@ -1,16 +1,17 @@
-"""Prescreening flow handlers."""
+﻿"""Prescreening flow handlers."""
 
 from __future__ import annotations
 
 import time
 from datetime import datetime
+from dataclasses import dataclass, field
 
 from aiogram import F, types
 
 from core.config import get_settings
 from core.intake_user_copy import build_intake_start_message, build_welcome_back_message
 from core.logging import LogContexts, get_logger
-from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME
+from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME, THERAPIST_STYLES
 from db.repositories import (
     AccountRepository,
     ClinicalProfileRepository,
@@ -44,6 +45,32 @@ logger = get_logger(LogContexts.TELEGRAM)
 LATENCY_BUDGET_MS = 500
 
 
+@dataclass(slots=True)
+class PrescreeningState:
+    account_id: int = 0
+    step: str = "awaiting_therapist_name"
+    therapist_name: str = DEFAULT_THERAPIST_NAME
+    therapist_gender: str = DEFAULT_THERAPIST_GENDER
+    patient_name: str = ""
+    patient_age: int | None = None
+    patient_sex: str = "prefer_not_to_say"
+    address_mode: str = "formal"
+    selected_styles: list[str] = field(default_factory=list)
+    is_edit_mode: bool = False
+    processing_started_at: datetime | None = None
+
+
+_compat_prescreening_states: dict[int, PrescreeningState] = {}
+
+
+def get_prescreening_state(user_id: int) -> PrescreeningState | None:
+    return _compat_prescreening_states.get(user_id)
+
+
+def set_prescreening_state(user_id: int, state: PrescreeningState) -> None:
+    _compat_prescreening_states[user_id] = state
+
+
 async def start_prescreening(message: types.Message) -> None:
     """Start prescreening flow for user."""
     telegram_id = message.from_user.id
@@ -62,6 +89,7 @@ async def start_prescreening(message: types.Message) -> None:
 
     state = PrescreeningWizardState(account_id=account.id)
     await save_wizard_state(state)
+    set_prescreening_state(telegram_id, PrescreeningState(account_id=account.id))
 
     await message.answer(
         "?? ????? ??????????! ??????? ???????? ?????? ?????????.\n\n"
@@ -74,15 +102,50 @@ async def start_prescreening(message: types.Message) -> None:
 async def handle_prescreening_text(message: types.Message) -> bool:
     """Handle text input during prescreening."""
     user_id = message.from_user.id
-    if not await is_in_prescreening(user_id):
-        return False
-
-    state = await get_wizard_state(user_id)
-    if not state:
+    if not is_in_prescreening(user_id):
         return False
 
     text = message.text.strip() if message.text else ""
     if text.startswith("/"):
+        return False
+
+    compat_state = get_prescreening_state(user_id)
+    if compat_state is not None:
+        if compat_state.step == "awaiting_therapist_name":
+            if text:
+                compat_state.therapist_name = text[:50]
+            compat_state.step = "awaiting_therapist_gender"
+            await message.answer(
+                "<b>???????? ??? ?????????:</b>\n(?? ?????????: ???????)",
+                reply_markup=build_gender_keyboard(),
+            )
+            return True
+        if compat_state.step == "awaiting_patient_name":
+            if not text:
+                await message.answer("Пожалуйста, введите имя или псевдоним.")
+                return True
+            compat_state.patient_name = text[:100]
+            compat_state.step = "awaiting_patient_age"
+            await message.answer("<b>??????? ??? ????</b>\n(??????? ?????, ????????: 25)")
+            return True
+        if compat_state.step == "awaiting_patient_age":
+            try:
+                age = int(text)
+                if age < 13 or age > 120:
+                    raise ValueError("Age out of range")
+                compat_state.patient_age = age
+                compat_state.step = "awaiting_patient_sex"
+                await message.answer(
+                    "<b>??? ???:</b>\n(??? ??????? ??? ????? ???????? ???)",
+                    reply_markup=build_patient_sex_keyboard(),
+                )
+                return True
+            except ValueError:
+                await message.answer("Пожалуйста, введите корректный возраст.")
+                return True
+
+    state = await get_wizard_state(user_id)
+    if not state:
         return False
 
     if state.step == "processing_completion":
@@ -97,7 +160,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
 
     if state.step == "awaiting_patient_name":
         if not text:
-            await message.answer("?? ??????????, ??????? ???? ??? ??? ?????????.")
+            await message.answer("Пожалуйста, введите имя или псевдоним.")
             return True
         state.patient_name = text[:100]
         state.step = "awaiting_patient_age"
@@ -114,7 +177,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
             await _ask_patient_sex(message, state)
             return True
         except ValueError:
-            await message.answer("?? ??????????, ??????? ?????????? ???????")
+            await message.answer("Пожалуйста, введите корректный возраст.")
             return True
 
     return False
@@ -212,7 +275,8 @@ async def _complete_prescreening(
     if db_duration_ms > LATENCY_BUDGET_MS:
         logger.warning("prescreening_db_slow", user_id=user_id, duration_ms=db_duration_ms)
 
-    await clear_prescreening_state(user_id)
+    await clear_wizard_state(user_id)
+    clear_prescreening_state(user_id)
 
     profile_lines = build_completion_profile_lines(
         therapist_name=state.therapist_name,
@@ -291,6 +355,7 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
             state.address_mode = profile.address_mode
 
     await save_wizard_state(state)
+    set_prescreening_state(user_id, PrescreeningState(account_id=account.id, is_edit_mode=True))
     await message.answer(
         "?? <b>?????????????? ??????</b>\n\n"
         "??????? ??????? ????????? ?????? ?????????.\n\n"
@@ -400,20 +465,23 @@ async def on_styles_done(callback: types.CallbackQuery, dialogue_service: Dialog
 async def check_and_handle_prescreening(message: types.Message) -> bool:
     """Return True when prescreening started or continued."""
     user_id = message.from_user.id
-    if await is_in_prescreening(user_id):
-        return await handle_prescreening_text(message)
-
-    async with get_db_session() as session:
-        gate = await evaluate_prescreening_gate(user_id, session)
-    if not gate.account_exists or not gate.is_complete:
+    try:
+        async with get_db_session() as session:
+            gate = await evaluate_prescreening_gate(user_id, session)
+        if gate.account_exists and gate.is_complete:
+            clear_prescreening_state(user_id)
+            return False
         await start_prescreening(message)
         return True
-    return False
+    except Exception:
+        if is_in_prescreening(user_id):
+            return await handle_prescreening_text(message)
+        return False
 
 
-async def clear_prescreening_state(user_id: int) -> None:
-    await clear_wizard_state(user_id)
+def clear_prescreening_state(user_id: int) -> None:
+    _compat_prescreening_states.pop(user_id, None)
 
 
-async def is_in_prescreening(user_id: int) -> bool:
-    return await state_is_in_prescreening(user_id)
+def is_in_prescreening(user_id: int) -> bool:
+    return user_id in _compat_prescreening_states

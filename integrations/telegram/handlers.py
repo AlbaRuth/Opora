@@ -8,11 +8,14 @@ from aiogram import types
 from aiogram.filters import Command
 
 from core.logging import get_logger, LogContexts
+from db.session import get_db_session
+from db import repositories as db_repositories
 from integrations.telegram.bot import dispatcher
 from integrations.telegram.prescreening import (
     check_and_handle_prescreening,
     is_in_prescreening,
     handle_prescreening_text,
+    start_prescreening,
 )
 from services.dialogue_service import DialogueService
 
@@ -190,7 +193,7 @@ async def on_reset_confirm_yes(callback: types.CallbackQuery, dialogue_service: 
 
     # Clear prescreening in-memory state before DB deletion
     from integrations.telegram.prescreening import clear_prescreening_state
-    await clear_prescreening_state(user_id)
+    clear_prescreening_state(user_id)
 
     # Delete all user data from database
     deleted = await dialogue_service.reset_user_data(telegram_id=user_id)
@@ -243,14 +246,29 @@ async def handle_message(message: types.Message, dialogue_service: DialogueServi
     )
 
     # Check if user is in prescreening flow first
-    if await is_in_prescreening(message.from_user.id):
+    if is_in_prescreening(message.from_user.id):
         handled = await handle_prescreening_text(message)
         if handled:
             return
 
-    prescreening_handled = await check_and_handle_prescreening(message)
-    if prescreening_handled:
-        return
+    prescreening_checked_complete = False
+    async with get_db_session() as session:
+        account = await db_repositories.AccountRepository(session).get_by_telegram_id(
+            message.from_user.id
+        )
+        if account:
+            complete = await db_repositories.TherapistPreferenceRepository(
+                session
+            ).is_prescreening_complete(account.id)
+            if not complete:
+                await start_prescreening(message)
+                return
+            prescreening_checked_complete = True
+
+    if not prescreening_checked_complete:
+        prescreening_handled = await check_and_handle_prescreening(message)
+        if prescreening_handled:
+            return
 
     # User has completed prescreening - normal dialogue flow
     result = await dialogue_service.process_message(
