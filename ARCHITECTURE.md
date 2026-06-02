@@ -390,7 +390,9 @@ services:
 - `INTAKE_ENABLED` — глобальный feature-flag стадии intake
 - `INTAKE_MIN_USER_TURNS` — минимальное число реплик пациента перед завершением intake
 - `INTAKE_REQUIRED_FIELDS` — обязательные поля карточки
-- `LLM_INTAKE_*` — отдельные параметры LLM для intake-агента
+- `INTAKE_EMOTION_EVAL_ENABLED` — оценка эмоции через `TherapistEvaluator.assess_emotion` на каждом ходе intake
+- `INTAKE_MIN_RESPONSE_SENTENCES`, `INTAKE_MAX_QUESTION_WORDS`, `INTAKE_HOLD_EMOTION_INTENSITY_THRESHOLD` (дефолт 0.95) — `IntakeResponsePolicy`: вопросы по умолчанию `encourage`; `defer` при кризисе, `pushback_type=stage` (жалобы на вопросы / запрос советов → `INTAKE_STAGE_PUSHBACK_HANDLING` в system prompt), или `pushback_type=hard_stop` (явный отказ отвечать). Эмоция влияет на тон и длину отражения, не отменяет сбор карточки
+- `LLM_INTAKE_*` — отдельные параметры LLM для intake-агента (temperature ~0.52–0.58, max_tokens ~700–850)
 
 ### Релиз и откат
 

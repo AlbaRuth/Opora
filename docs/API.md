@@ -195,30 +195,43 @@ fallback = TherapistPrompts.get_fallback_response(
 )
 ```
 
-### IntakePrompts (NEW parameters)
+### IntakePrompts (system / user split)
 
 ```python
 from agents.prompts import IntakePrompts
 
-# Intake turn с NEW полями
-prompt = IntakePrompts.get_intake_turn_prompt(
-    patient_message="...",
+# System: global static rules + session context (persona, prescreening, completion policy)
+system_prompt = IntakePrompts.get_system_message(
+    therapist_name="Опора",
+    therapist_gender="female",
+    therapist_styles=["business"],
     patient_name="Имя",
     patient_age=25,
-    patient_sex="female",  # NEW
-    address_mode="formal",  # NEW
-    current_card={...},
-    min_user_turns=3,
-    current_user_turns=1,
-    required_fields=[...],
-    max_question_words=15,
-    summary_max_words=100,
+    patient_sex="female",
+    address_mode="formal",
+    min_user_turns=6,
+    required_fields=["current_problems", "mental_health_history"],
+    max_user_turns=12,
 )
+
+# User: turn snapshot only (card, dialogue, active style, current message)
+user_prompt = IntakePrompts.get_intake_turn_user_prompt(
+    patient_message="...",
+    current_card={...},
+    current_user_turns=1,
+    recent_dialogue=[{"role": "user", "content": "..."}],
+    therapist_styles=["business"],
+    therapist_name="Опора",
+    max_user_turns=12,
+)
+
+# Deprecated alias — returns user_prompt only; use get_system_message + get_intake_turn_user_prompt
+legacy_user = IntakePrompts.get_intake_turn_prompt(...)
 
 # Fallback с address_mode
 fallback = IntakePrompts.get_fallback_intake_response(
     patient_name="Имя",
-    address_mode="informal",  # NEW
+    address_mode="informal",
 )
 ```
 

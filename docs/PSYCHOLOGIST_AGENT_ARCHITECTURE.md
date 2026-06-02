@@ -484,7 +484,7 @@ Intake считается завершенным, если выполнено о
 Система использует несколько наборов промптов:
 
 1. `TherapistPrompts` — генерация пользовательского ответа психолога;
-2. `IntakePrompts` — сбор карточки на этапе intake;
+2. `IntakePrompts` — сбор карточки на этапе intake (`get_system_message` = global + session static; `get_intake_turn_user_prompt` = card, dialogue, message per turn);
 3. `EvaluatorPrompts` — скрытые аналитические задачи.
 
 ### 1. Промпты терапевта

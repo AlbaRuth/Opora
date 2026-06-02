@@ -449,7 +449,7 @@ class DialogueService:
                     return {
                         "response": doctor_content,
                         "session_ended": False,
-                        "strategy": {},
+                        "strategy": result.get("strategy", {}),
                     }
 
                 # Process through therapy agent (legacy logic preserved)

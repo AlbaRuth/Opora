@@ -16,8 +16,11 @@ from db.session import get_db_session
 from integrations.langfuse import get_current_trace_id
 from integrations.openrouter import OpenRouterClient
 
-from .session_state import SessionState
+from agents.evaluators.therapist_evaluator import TherapistEvaluator
+from agents.intake.response_policy import IntakeResponsePolicy
 from agents.prompts.intake_prompts import IntakePrompts
+
+from .session_state import SessionState
 
 logger = get_logger(LogContexts.AGENT)
 
@@ -28,6 +31,7 @@ class IntakeAgent:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.llm_client = OpenRouterClient()
+        self.evaluator = TherapistEvaluator()
 
     def _compute_max_user_turns(self) -> int | None:
         """Compute maximum user turns for intake based on settings."""
@@ -74,10 +78,12 @@ class IntakeAgent:
                         state.patient_display_name,
                         state.address_mode,
                         state.therapist_gender,
+                        patient_text,
                     ),
                     "intake_completed": False,
                     "missing_fields": self.settings.intake_required_fields_list,
                     "card_updates": {},
+                    "strategy": {},
                 }
 
             # Get recent dialogue for context window
@@ -89,36 +95,82 @@ class IntakeAgent:
                     limit=context_window_size,
                 )
 
-            # Build prompt with context window and limit
-            prompt = IntakePrompts.get_intake_turn_prompt(
+            primary_emotion = ""
+            emotional_intensity = 0.0
+            if self.settings.intake_emotion_eval_enabled:
+                emotion_result = await self.evaluator.assess_emotion(
+                    patient_text,
+                    account_id,
+                    state.session_db_id,
+                )
+                if isinstance(emotion_result, dict):
+                    primary_emotion = str(emotion_result.get("primary_emotion", "") or "")
+                    try:
+                        emotional_intensity = float(
+                            emotion_result.get("emotional_intensity", 0.0) or 0.0
+                        )
+                    except (TypeError, ValueError):
+                        emotional_intensity = 0.0
+
+            missing_before = self._missing_required_fields(current_card)
+            turn_directives = IntakeResponsePolicy.compute_directives(
                 patient_message=patient_text,
+                therapist_styles=state.therapist_styles,
+                current_user_turns=state.intake_user_turns,
+                primary_emotion=primary_emotion,
+                emotional_intensity=emotional_intensity,
+                missing_fields=missing_before,
+                recent_dialogue=recent_dialogue,
+                min_sentences=self.settings.intake_min_response_sentences,
+                max_question_words=self.settings.intake_max_question_words,
+                hold_emotion_intensity_threshold=(
+                    self.settings.intake_hold_emotion_intensity_threshold
+                ),
+                max_user_turns=max_user_turns,
+            )
+
+            system_prompt = IntakePrompts.get_system_message(
+                therapist_name=state.therapist_name,
+                therapist_gender=state.therapist_gender,
+                therapist_styles=state.therapist_styles,
                 patient_name=state.patient_display_name,
                 patient_age=state.patient_age,
                 patient_sex=state.patient_sex,
                 address_mode=state.address_mode,
-                current_card=current_card,
                 min_user_turns=self.settings.intake_min_user_turns,
-                current_user_turns=state.intake_user_turns,
                 required_fields=self.settings.intake_required_fields_list,
                 max_user_turns=max_user_turns,
-                recent_dialogue=recent_dialogue,
-                therapist_name=state.therapist_name,
-                therapist_gender=state.therapist_gender,
-                therapist_styles=state.therapist_styles,  # NEW: styles instead of traits
             )
+            user_prompt = IntakePrompts.get_intake_turn_user_prompt(
+                patient_message=patient_text,
+                current_card=current_card,
+                current_user_turns=state.intake_user_turns,
+                recent_dialogue=recent_dialogue,
+                therapist_styles=state.therapist_styles,
+                therapist_name=state.therapist_name,
+                max_user_turns=max_user_turns,
+                turn_directives=turn_directives,
+                missing_fields=missing_before,
+                required_fields=self.settings.intake_required_fields_list,
+            )
+
+            intake_strategy = {
+                "primary_emotion": primary_emotion,
+                "emotional_intensity": emotional_intensity,
+                "response_mode": turn_directives.response_mode,
+                "question_guidance": turn_directives.question_guidance,
+                "allow_question": turn_directives.allow_question,
+                "pushback_type": turn_directives.pushback_type,
+                "active_style": turn_directives.active_style,
+                "missing_fields_count": len(missing_before),
+                "suggested_focus_field": turn_directives.suggested_focus_field,
+            }
 
             result = await self.llm_client.chat_completion(
                 model=self.settings.llm_intake_model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": IntakePrompts.get_system_message(
-                            therapist_name=state.therapist_name,
-                            therapist_gender=state.therapist_gender,
-                            therapist_styles=state.therapist_styles  # NEW: styles instead of traits,
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
                 ],
                 temperature=self.settings.llm_intake_temperature,
                 max_tokens=self.settings.llm_intake_max_tokens,
@@ -167,7 +219,7 @@ class IntakeAgent:
             await self._log_call(
                 account_id=account_id,
                 session_id=state.session_db_id,
-                prompt=prompt,
+                prompt=user_prompt,
                 result=result,
                 trace_id=trace_id,
                 metadata={
@@ -179,6 +231,14 @@ class IntakeAgent:
                     "initial_info_insufficient": initial_info_insufficient,
                     "patient_sex": state.patient_sex,
                     "address_mode": state.address_mode,
+                    "primary_emotion": primary_emotion,
+                    "emotional_intensity": emotional_intensity,
+                    "response_mode": turn_directives.response_mode,
+                    "question_guidance": turn_directives.question_guidance,
+                    "allow_question": turn_directives.allow_question,
+                    "pushback_type": turn_directives.pushback_type,
+                    "suggested_focus_field": turn_directives.suggested_focus_field,
+                    "missing_fields_count": len(missing_before),
                 },
             )
 
@@ -188,6 +248,7 @@ class IntakeAgent:
                     state.patient_display_name,
                     state.address_mode,
                     state.therapist_gender,
+                    patient_text,
                 )
 
             return {
@@ -196,6 +257,7 @@ class IntakeAgent:
                 "missing_fields": missing_required,
                 "initial_info_insufficient": initial_info_insufficient,
                 "card_updates": merged,
+                "strategy": intake_strategy,
             }
 
     def _parse_json_content(self, content: str) -> dict[str, Any]:

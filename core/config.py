@@ -100,8 +100,20 @@ class Settings(BaseSettings):
         default="current_problems,mental_health_history,physical_health_history",
         alias="INTAKE_REQUIRED_FIELDS",
     )
-    intake_max_question_words: int = Field(default=35, alias="INTAKE_MAX_QUESTION_WORDS")
+    intake_max_question_words: int = Field(default=25, alias="INTAKE_MAX_QUESTION_WORDS")
     intake_summary_max_words: int = Field(default=180, alias="INTAKE_SUMMARY_MAX_WORDS")
+    intake_emotion_eval_enabled: bool = Field(
+        default=True,
+        alias="INTAKE_EMOTION_EVAL_ENABLED",
+    )
+    intake_min_response_sentences: int = Field(
+        default=3,
+        alias="INTAKE_MIN_RESPONSE_SENTENCES",
+    )
+    intake_hold_emotion_intensity_threshold: float = Field(
+        default=0.95,
+        alias="INTAKE_HOLD_EMOTION_INTENSITY_THRESHOLD",
+    )
     # NEW: Context window and max turns multipliers
     intake_context_window_multiplier: int = Field(
         default=2,
@@ -117,11 +129,11 @@ class Settings(BaseSettings):
     )
     # UPDATED: Higher default temperature for more natural, varied responses
     llm_intake_temperature: float = Field(
-        default=0.45,
+        default=0.55,
         alias="LLM_INTAKE_TEMPERATURE",
     )
     llm_intake_max_tokens: int = Field(
-        default=550,
+        default=750,
         alias="LLM_INTAKE_MAX_TOKENS",
     )
     # NEW: Additional sampling parameters for intake
@@ -130,11 +142,11 @@ class Settings(BaseSettings):
         alias="LLM_INTAKE_TOP_P",
     )
     llm_intake_frequency_penalty: float = Field(
-        default=0.3,
+        default=0.38,
         alias="LLM_INTAKE_FREQUENCY_PENALTY",
     )
     llm_intake_presence_penalty: float = Field(
-        default=0.15,
+        default=0.10,
         alias="LLM_INTAKE_PRESENCE_PENALTY",
     )
     

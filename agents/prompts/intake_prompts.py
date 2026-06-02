@@ -1,18 +1,26 @@
 """
 Prompt templates for IntakeAgent.
-All control instructions are in English; patient-facing text is Russian.
-NEW: Includes address_mode (formal/informal) for controlling tone (ты/вы).
-NEW: Added contextual memory, anti-repetition rules, and adaptive response length.
-NEW: 4 distinct communication styles (friendly, soft, business, motivating) with dynamic switching.
+
+Three layers:
+- Global static (build_global_system_instructions): JSON schema, rules — identical every call.
+- Session static (build_session_system_context): persona, prescreening, completion policy — stable per intake session.
+- Turn dynamic (get_intake_turn_user_prompt): card snapshot, dialogue window, current message.
+
+Control instructions are in English; patient-facing text and clinical card fields are Russian.
 """
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agents.intake.response_policy import TurnDirectives
 
 
 class IntakePrompts:
     """Prompts for initial intake stage."""
 
-    # CORE THERAPEUTIC PRINCIPLES (MANDATORY - NEVER VIOLATE)
     CORE_THERAPEUTIC_PRINCIPLES = """
 CORE THERAPEUTIC PRINCIPLES FOR INTAKE (MANDATORY - NEVER VIOLATE):
 
@@ -47,7 +55,6 @@ CORE THERAPEUTIC PRINCIPLES FOR INTAKE (MANDATORY - NEVER VIOLATE):
    - Never claim certainty about mental health conditions
 """
 
-    # Anti-repetition patterns to avoid in consecutive responses
     DEFAULT_AVOID_PATTERNS = [
         "Я понимаю",
         "Я вас услышал",
@@ -61,8 +68,167 @@ CORE THERAPEUTIC PRINCIPLES FOR INTAKE (MANDATORY - NEVER VIOLATE):
         "Скажи, пожалуйста",
     ]
 
-    # NEW: 4 distinct communication styles for intake with clear behavioral guidelines
-    # UPDATED: Added boundary_checks to prevent therapeutic boundary violations
+    INTAKE_JSON_SCHEMA = """
+Return JSON ONLY with this exact schema:
+{
+  "mental_health_history": "string",
+  "physical_health_history": "string",
+  "current_problems": "string",
+  "intake_hypothesis": "string",
+  "intake_hypothesis_explanation": "string",
+  "missing_fields": ["string"],
+  "is_intake_complete": true_or_false,
+  "patient_response_ru": "string"
+}
+"""
+
+    INTAKE_CARD_UPDATE_RULES = """
+Rules for updating card fields:
+0) LANGUAGE (MANDATORY): All clinical card string fields — mental_health_history,
+   physical_health_history, current_problems, intake_hypothesis, intake_hypothesis_explanation —
+   MUST be written strictly in Russian, even if the patient writes in another language.
+   Translate relevant facts into Russian when updating the card; do not leave card fields in English
+   or mixed languages.
+1) Update fields only when patient provided enough new evidence; otherwise keep previous values.
+2) Keep hypothesis as preliminary and uncertain; never claim official diagnosis.
+"""
+
+    INTAKE_MISSION = """
+INTAKE MISSION (PRIMARY GOAL FOR THIS STAGE):
+
+1) Understand the patient and fill the intake clinical card: current_problems,
+   mental_health_history, physical_health_history, plus a cautious preliminary hypothesis.
+2) Questions are tools for care, not interrogation — open-ended, grounded in what they just said.
+3) On intake, when question_guidance=encourage (the default while the card is open):
+   reflect first, then end with one gentle open-ended question — this is how you gather
+   the card. Do not skip questions out of caution; skip only when TURN CONTEXT says
+   question_guidance=defer (true crisis/safety concern or the patient clearly asks to stop questions).
+   High emotional_intensity alone does NOT cancel questions — reflect longer, then ask gently.
+4) Stay with the patient's thread; do not checklist-interview through required fields.
+5) If answers stay vague on a needed topic (short reply, "не знаю", deflection): once per
+   topic, offer a warm nudge that sharing helps tailor support — without obligation or pressure.
+6) If the patient pushes back on questions or asks for advice/action plans now, follow
+   INTAKE_STAGE_PUSHBACK_HANDLING (this is one turn without a direct question; not a permanent stop).
+7) Anti-patterns: template "что привело вас/тебя", "Name, [question]?" openers,
+   closed rapid-fire questions without any reflection.
+"""
+
+    INTAKE_STAGE_PUSHBACK_HANDLING = """
+INTAKE STAGE PUSHBACK AND ADVICE REQUESTS (MANDATORY WHEN TRIGGERED):
+
+WHEN TO APPLY (recognize in the patient's message — Russian or paraphrases):
+- Complaints about too many or constant questions ("why do you keep asking", "stop interrogating").
+- Impatience to skip intake and "get to the point" or receive self-improvement tips now.
+- Direct requests for advice, homework, action steps, or "what should I do to feel better".
+
+CLINICAL STANCE (first session / intake — aligned with collaborative assessment, not MI confrontation):
+- Roll with resistance: validate frustration or urgency; do not argue, defend, or escalate.
+- The first phase is for understanding and rapport; problem-solving and structured change work
+  typically deepen in later sessions once you know the person (cf. standard intake practice).
+- Premature advice can miss context and weaken trust; on intake you gather information first.
+
+RESPONSE SEQUENCE in patient_response_ru (typically 4-6 sentences; all text in Russian):
+1) VALIDATE: acknowledge their feeling (hurried, annoyed, wanting tools) without defensiveness.
+2) NORMALIZE STAGE: explain that right now you are in the intake phase — getting to know them
+   and building a preliminary picture; this is not yet the working-through phase.
+3) BOUNDARY (transparent): during intake you will NOT give advice, homework, action plans, or
+   "what to do" lists — not from lack of care, but because you need enough context first.
+4) FUTURE ORIENTATION: in upcoming therapy sessions you will work together on their problems
+   and goals; intake makes that work safer and more tailored to them.
+5) COLLABORATIVE PACING: invite them to share in their own words and at their own pace what
+   matters most to them now — patient-led, warm, non-interrogative tone.
+6) THIS TURN ONLY: end with an open INVITATION (e.g. "можете рассказать…", "если хотите,
+   поделитесь…") — do NOT end with a direct question mark; no "?" on this turn.
+
+ANTI-PATTERNS for this scenario:
+- Do not say they "must" answer your questions or that rules require interrogation.
+- Do not give steps, techniques, CBT homework, or "you should try…".
+- Do not promise quick fixes or guaranteed outcomes.
+- Do not sound like a policy bot or over-apologize.
+
+AFTER THIS TURN:
+- If the patient continues cooperatively, resume gentle information gathering on later turns.
+- If pushback repeats, briefly repeat the stage rationale once; still no advice.
+"""
+
+    INTAKE_RESPONSE_RULES = """
+Rules for generating patient_response_ru (CRITICAL - READ CAREFULLY):
+
+DEFAULT LENGTH (unless TURN RESPONSE DIRECTIVE overrides):
+- Minimum 3 complete sentences in most turns; 4-6 when emotional weight is high.
+- Never reply with only one short sentence plus a single question.
+
+PATIENT NAME USAGE:
+- The patient's name is available in SESSION CONTEXT but is NOT required every turn.
+- Use the name sparingly: at most once every 2-3 counselor replies, or when closing intake.
+- Do NOT open with "Name, [question]?" — it feels scripted and cold.
+- Prefer natural contact without name: reflective openings, "вы/ты" per address mode.
+
+CONTEXT AWARENESS:
+- Build upon previous exchanges — do not treat each turn as isolated.
+- If the patient expands on a topic, stay with it instead of jumping to a checklist.
+- Show continuity when relevant: "Вы упомянули ранее..." / "Как вы уже говорили..."
+
+RESPONSE MODES (TURN CONTEXT specifies the active mode — follow it strictly):
+- hold_space: extended empathic reflection; when question_guidance=encourage, still end with
+  one gentle question after validation. When question_guidance=defer — no question (crisis,
+  hard stop on questions, or stage pushback per INTAKE_STAGE_PUSHBACK_HANDLING).
+- gentle_explore / structured_gather: reflection first; when question_guidance=encourage,
+  include one soft open-ended question after reflection (expected on most intake turns).
+
+QUESTION CADENCE (when question_guidance=encourage):
+- Open-ended, tied to what they just said — not generic intake scripts.
+- Default intake pattern: reflect, then ask — patient feels heard before going deeper.
+- Bad: closed/directive ("Ты чувствуешь тревогу?"), advice, "нужно/должен/следует".
+- Bad: "А что ещё?", "Что-нибудь ещё?", "что привело вас/тебя к разговору" as a default opener.
+
+WHEN TO NUDGE (rare, one warm sentence max):
+- Patient gives very short or evasive answers twice on a topic needed for the card.
+- Gently note that a bit more detail helps you support them better — no "you must answer".
+
+ADVICE OR "WHAT SHOULD I DO" ON INTAKE:
+- Do not provide solutions, techniques, or homework — use INTAKE_STAGE_PUSHBACK_HANDLING instead.
+
+ANTI-PATTERNS:
+- "Имя, один прямой вопрос?" without preamble.
+- Multiple stacked questions in one message without reflection.
+- Template openings repeated across the session.
+
+COMPLETION MESSAGE (when is_intake_complete is true):
+- Acknowledge understanding; summarize key points naturally (not as a bullet list).
+- Include preliminary hypothesis with explanation; emphasize it is preliminary.
+- Transition smoothly to ongoing therapy; name is optional once here.
+"""
+
+    INTAKE_ANTI_REPETITION_STATIC = """
+ANTI-REPETITION (MANDATORY):
+- Do NOT use "Я понимаю" / "Я вас услышал" / "Я понял вас" more than once in the entire intake session.
+- Reference specific details from what the patient just said to show you're truly listening.
+- Vary your opening: sometimes acknowledge emotions directly, sometimes ask a clarifying question, sometimes reflect back what you heard.
+- Instead of repetitive phrases, use varied language and reference specific details from the conversation.
+"""
+
+    INTAKE_SAFETY_RULES = """
+SAFETY:
+- Never output markdown fences, comments, or extra keys in JSON.
+- If the patient asks your name or who is speaking, patient_response_ru must use the counselor display name from SESSION CONTEXT and must NOT say you are an AI/bot/ассистент.
+"""
+
+    INTAKE_ROLE_INTRO = """
+You help collect intake information before ongoing psychological counseling.
+You do not provide diagnosis or formal treatment plans.
+Your job is to understand the patient well enough to fill the intake card and form a cautious
+preliminary hypothesis — through empathic reflection and timely, gentle questions, not an interview.
+You follow the patient's pace; questions serve understanding and care, not a checklist.
+CRITICAL: Vary your language and phrasing. Do not use the same opening phrases repeatedly.
+CRITICAL: Reference specific details from the conversation context to show you are listening.
+CRITICAL: Adapt response length to emotional weight — longer when they share feelings or pain.
+CRITICAL: Do not address the patient by name in every message; use it sparingly.
+CRITICAL: Any patient-facing text MUST be in Russian.
+CRITICAL: All clinical card fields you produce (history, problems, hypothesis) MUST be strictly in Russian.
+Never say you are an AI, bot, chatbot, or "ИИ-ассистент" / "искусственный интеллект".
+"""
+
     STYLE_GUIDELINES = {
         "friendly": {
             "description": "Дружелюбный — теплый, открытый тон для установления контакта",
@@ -131,43 +297,59 @@ CORE THERAPEUTIC PRINCIPLES FOR INTAKE (MANDATORY - NEVER VIOLATE):
     }
 
     @staticmethod
-    def get_system_message(
-        therapist_name: str = "Опора",
-        therapist_gender: str = "female",
-        therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
-    ) -> str:
-        """System message: intake behavior + counselor persona from prescreening.
-        NEW: Uses 4 distinct communication styles with dynamic switching.
-        """
-        name = (therapist_name or "").strip() or "Опора"
-        gender = therapist_gender if therapist_gender in ("female", "male") else "female"
-        styles = therapist_styles or []
+    def build_global_system_instructions() -> str:
+        """Global static instructions: schema, card/response rules — cache-friendly prefix."""
+        avoid_lines = "\n".join(f"- {p}" for p in IntakePrompts.DEFAULT_AVOID_PATTERNS)
+        anti_repetition = (
+            f"{IntakePrompts.INTAKE_ANTI_REPETITION_STATIC}\n"
+            f"AVOID using these repetitive phrases in your response:\n{avoid_lines}\n"
+        )
+        return "\n".join(
+            part.strip()
+            for part in (
+                IntakePrompts.INTAKE_ROLE_INTRO,
+                IntakePrompts.INTAKE_MISSION,
+                IntakePrompts.INTAKE_STAGE_PUSHBACK_HANDLING,
+                IntakePrompts.INTAKE_JSON_SCHEMA,
+                IntakePrompts.INTAKE_CARD_UPDATE_RULES,
+                IntakePrompts.INTAKE_RESPONSE_RULES,
+                anti_repetition,
+                IntakePrompts.INTAKE_SAFETY_RULES,
+                IntakePrompts.CORE_THERAPEUTIC_PRINCIPLES,
+            )
+            if part.strip()
+        )
 
-        # NEW: Build styles section with detailed behavioral guidelines
-        styles_section = ""
-        if styles:
-            style_details = []
-            for style in styles:
-                if style in IntakePrompts.STYLE_GUIDELINES:
-                    sg = IntakePrompts.STYLE_GUIDELINES[style]
-                    markers = "\n    - ".join([""] + sg["language_markers"])
-                    boundary_checks = "\n    - ".join([""] + sg.get("boundary_checks", []))
-                    style_details.append(
-                        f"\n- {sg['description']}\n"
-                        f"  Language markers:{markers}\n"
-                        f"  BOUNDARY CHECKS (MUST FOLLOW):{boundary_checks}\n"
-                        f"  Use for: {sg['intake_focus']}"
-                    )
+    @staticmethod
+    def _build_styles_section(styles: list[str]) -> str:
+        if not styles:
+            return ""
 
-            styles_section = "\n\nCOMMUNICATION STYLES (CRITICAL - MUST FOLLOW):" + "".join(style_details)
+        style_details = []
+        for style in styles:
+            if style not in IntakePrompts.STYLE_GUIDELINES:
+                continue
+            sg = IntakePrompts.STYLE_GUIDELINES[style]
+            markers = "\n    - ".join([""] + sg["language_markers"])
+            boundary_checks = "\n    - ".join([""] + sg.get("boundary_checks", []))
+            style_details.append(
+                f"\n- {sg['description']}\n"
+                f"  Language markers:{markers}\n"
+                f"  BOUNDARY CHECKS (MUST FOLLOW):{boundary_checks}\n"
+                f"  Use for: {sg['intake_focus']}"
+            )
 
-            # Add dynamic switching instructions for multiple styles
-            if len(styles) > 1:
-                styles_section += f"""\n\nDYNAMIC STYLE SWITCHING (MANDATORY):
+        styles_section = "\n\nCOMMUNICATION STYLES (CRITICAL - MUST FOLLOW):" + "".join(style_details)
+
+        if len(styles) > 1:
+            styles_section += f"""
+
+DYNAMIC STYLE SWITCHING (MANDATORY):
 You have {len(styles)} styles selected. Choose the ACTIVE style for EACH response based on:
 1. Current intake topic (mental health history vs current problems vs physical health)
 2. Patient's emotional state in their message
-3. Stage of intake (early rapport building vs specific fact gathering)\n
+3. Stage of intake (early rapport building vs specific fact gathering)
+
 Style priority rules for intake:
 - If discussing traumatic/sensitive experiences or patient shows distress → ACTIVE: soft
 - If gathering specific medical history, symptoms, dates, facts → ACTIVE: business
@@ -175,30 +357,266 @@ Style priority rules for intake:
 - If establishing initial rapport, general check-in, neutral topics → ACTIVE: friendly
 - Default when unclear: Use the FIRST selected style ({styles[0]})
 
-CRITICAL: Each response MUST clearly embody ONE active style. Do NOT blend styles equally in one response."""
-            else:
-                styles_section += f"""\n\nACTIVE STYLE: You are using '{styles[0]}' for ALL responses in this intake. Embody it consistently.
-CRITICAL: You MUST follow ALL boundary checks listed above for this style."""
+CRITICAL: Each response MUST clearly embody ONE active style. Do NOT blend styles equally in one response.
+The TURN CONTEXT will specify ACTIVE STYLE FOR THIS RESPONSE — follow it."""
+        else:
+            styles_section += f"""
 
+ACTIVE STYLE: You are using '{styles[0]}' for ALL responses in this intake. Embody it consistently.
+CRITICAL: You MUST follow ALL boundary checks listed above for this style.
+The TURN CONTEXT will specify ACTIVE STYLE FOR THIS RESPONSE — follow it."""
+
+        return styles_section
+
+    @staticmethod
+    def _build_address_instruction(address_mode: str) -> str:
+        if address_mode == "formal":
+            return (
+                "Use formal address (вы) - respectful, professional tone. "
+                "Example: 'Расскажите, пожалуйста', 'Как вы себя чувствуете'"
+            )
         return (
-            "You help collect intake information before ongoing psychological counseling. "
-            "You do not provide diagnosis or formal treatment plans. "
-            "You gather facts, form a cautious preliminary hypothesis, and ask focused follow-up questions. "
-            "CRITICAL: Vary your language and phrasing. Do not use the same opening phrases repeatedly. "
-            "CRITICAL: Reference specific details from the conversation context to show you are listening. "
-            "CRITICAL: Adapt your response length to the emotional weight of the patient's message - "
-            "longer for deep emotional content, concise for factual answers. "
-            f'CRITICAL PERSONA: In all patient-facing replies you ARE the counselor named \"{name}\" '
-            f"(use Russian grammar consistent with counselor gender: {gender}). "
-            f"{styles_section}\n\n"
-            f"{IntakePrompts.CORE_THERAPEUTIC_PRINCIPLES}\n\n"
-            "If the patient asks your name or how to address you, give exactly that name — "
-            'by default \"Опора\" if unsure. '
-            "Never say you are an AI, bot, chatbot, or \"ИИ-ассистент\" / \"искусственный интеллект\". "
-            "CRITICAL: Any patient-facing text MUST be in Russian. "
-            "CRITICAL: All clinical card fields you produce (history, problems, hypothesis) "
-            "MUST be strictly in Russian."
+            "Use informal address (ты) - friendly, casual tone. "
+            "Example: 'Расскажи, пожалуйста', 'Как ты себя чувствуешь'"
         )
+
+    @staticmethod
+    def _build_completion_rules(
+        min_user_turns: int,
+        required_fields: list[str],
+        max_user_turns: int | None,
+    ) -> str:
+        required_fields_json = json.dumps(required_fields, ensure_ascii=False)
+        lines = [
+            "3) Intake can be complete only if:",
+            f"   - user_turns_after_processing >= {min_user_turns}",
+            f"   - all required fields are filled: {required_fields_json}",
+            "   - OR maximum intake turns reached (if applicable)",
+        ]
+        if max_user_turns:
+            lines.append(f"   - Maximum user turns for this session: {max_user_turns}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def build_session_system_context(
+        *,
+        therapist_name: str = "Опора",
+        therapist_gender: str = "female",
+        therapist_styles: list[str] | None = None,
+        patient_name: str = "",
+        patient_age: int | None = None,
+        patient_sex: str = "prefer_not_to_say",
+        address_mode: str = "formal",
+        min_user_turns: int = 6,
+        required_fields: list[str] | None = None,
+        max_user_turns: int | None = None,
+    ) -> str:
+        """Session-static context: persona, prescreening, completion policy — stable per intake session."""
+        name = (therapist_name or "").strip() or "Опора"
+        gender = therapist_gender if therapist_gender in ("female", "male") else "female"
+        styles = therapist_styles or []
+        age_text = str(patient_age) if patient_age is not None else ""
+        fields = required_fields or []
+        address_instruction = IntakePrompts._build_address_instruction(address_mode)
+        styles_section = IntakePrompts._build_styles_section(styles)
+        completion_rules = IntakePrompts._build_completion_rules(
+            min_user_turns, fields, max_user_turns
+        )
+
+        return f"""SESSION CONTEXT (stable for this intake session):
+
+CRITICAL PERSONA: In all patient-facing replies you ARE the counselor named "{name}"
+(use Russian grammar consistent with counselor gender: {gender}).
+If the patient asks your name or how to address you, give exactly that name — by default "Опора" if unsure.
+{styles_section}
+
+ADDRESS MODE (apply to every patient_response_ru):
+- {address_instruction}
+
+Patient profile (from prescreening):
+- name: {patient_name}
+- age: {age_text}
+- sex: {patient_sex}
+
+{completion_rules}
+"""
+
+    @staticmethod
+    def get_system_message(
+        therapist_name: str = "Опора",
+        therapist_gender: str = "female",
+        therapist_styles: list[str] | None = None,
+        patient_name: str = "",
+        patient_age: int | None = None,
+        patient_sex: str = "prefer_not_to_say",
+        address_mode: str = "formal",
+        min_user_turns: int = 6,
+        required_fields: list[str] | None = None,
+        max_user_turns: int | None = None,
+    ) -> str:
+        """Full system message: global static + session static."""
+        global_part = IntakePrompts.build_global_system_instructions()
+        session_part = IntakePrompts.build_session_system_context(
+            therapist_name=therapist_name,
+            therapist_gender=therapist_gender,
+            therapist_styles=therapist_styles,
+            patient_name=patient_name,
+            patient_age=patient_age,
+            patient_sex=patient_sex,
+            address_mode=address_mode,
+            min_user_turns=min_user_turns,
+            required_fields=required_fields,
+            max_user_turns=max_user_turns,
+        )
+        return f"{global_part}\n\n{session_part}"
+
+    @staticmethod
+    def resolve_active_style(
+        patient_message: str,
+        therapist_styles: list[str] | None,
+        current_user_turns: int,
+    ) -> str:
+        styles = therapist_styles or []
+        active_style = styles[0] if styles else "friendly"
+        if len(styles) <= 1:
+            return active_style
+
+        message_lower = patient_message.lower()
+        if any(word in message_lower for word in ["травма", "боль", "страх", "тревога", "слезы", "ужас"]):
+            return "soft" if "soft" in styles else active_style
+        if any(word in message_lower for word in ["когда", "сколько", "часто", "симптом", "диагноз"]):
+            return "business" if "business" in styles else active_style
+        if any(word in message_lower for word in ["хочу", "цель", "изменить", "справиться", "план"]):
+            return "motivating" if "motivating" in styles else active_style
+        if current_user_turns <= 2:
+            return "friendly" if "friendly" in styles else active_style
+        return active_style
+
+    @staticmethod
+    def _build_dialogue_context(
+        recent_dialogue: list[dict[str, str]] | None,
+        counselor_name: str,
+    ) -> str:
+        if not recent_dialogue:
+            return ""
+        dialogue_lines = []
+        for turn in recent_dialogue:
+            role = turn.get("role", "unknown")
+            content = turn.get("content", "")
+            if role == "user":
+                dialogue_lines.append(f"Patient: {content}")
+            elif role == "assistant":
+                dialogue_lines.append(f"Counselor ({counselor_name}): {content}")
+        if not dialogue_lines:
+            return ""
+        return "\nRecent intake dialogue:\n" + "\n".join(dialogue_lines) + "\n"
+
+    @staticmethod
+    def _build_card_gaps_block(
+        missing_fields: list[str] | None,
+        required_fields: list[str] | None,
+    ) -> str:
+        missing = missing_fields or []
+        required = required_fields or []
+        if not missing and not required:
+            return ""
+        missing_json = json.dumps(missing, ensure_ascii=False)
+        required_json = json.dumps(required, ensure_ascii=False)
+        if missing:
+            status = "incomplete"
+            guidance = (
+                "Explore these areas when emotionally appropriate; do not checklist-interview. "
+                "When question_guidance=encourage, a gentle question toward a gap is appropriate."
+            )
+        else:
+            status = "all required fields have evidence"
+            guidance = "Continue deepening understanding; questions are optional if natural."
+        return f"""
+CARD GAPS (intake {status}):
+- required fields: {required_json}
+- missing required: {missing_json}
+- guidance: {guidance}
+"""
+
+    @staticmethod
+    def get_intake_turn_user_prompt(
+        patient_message: str,
+        current_card: dict[str, str],
+        current_user_turns: int,
+        recent_dialogue: list[dict[str, str]] | None = None,
+        therapist_styles: list[str] | None = None,
+        therapist_name: str = "Опора",
+        max_user_turns: int | None = None,
+        turn_directives: TurnDirectives | None = None,
+        missing_fields: list[str] | None = None,
+        required_fields: list[str] | None = None,
+    ) -> str:
+        """Turn-dynamic user prompt: snapshot state for the current intake turn only."""
+        card_json = json.dumps(current_card, ensure_ascii=False)
+        counselor_name = (therapist_name or "").strip() or "Опора"
+        card_gaps_block = IntakePrompts._build_card_gaps_block(missing_fields, required_fields)
+        if turn_directives is not None:
+            active_style = turn_directives.active_style
+            focus_line = ""
+            if turn_directives.suggested_focus_field:
+                focus_line = (
+                    f"- suggested_focus_field: {turn_directives.suggested_focus_field}\n"
+                )
+            pushback_line = ""
+            if turn_directives.pushback_type != "none":
+                pushback_line = f"- pushback_type: {turn_directives.pushback_type}\n"
+            directive_block = f"""
+EMOTIONAL CONTEXT (evaluator):
+- primary_emotion: {turn_directives.primary_emotion or "unknown"}
+- emotional_intensity: {turn_directives.emotional_intensity:.2f}
+
+TURN RESPONSE DIRECTIVE (MANDATORY):
+{turn_directives.directive_en}
+- min_sentences: {turn_directives.min_sentences}
+- question_guidance: {turn_directives.question_guidance}
+- allow_question: {str(turn_directives.allow_question).lower()}
+- max_question_words: {turn_directives.max_question_words}
+{pushback_line}{focus_line}"""
+        else:
+            active_style = IntakePrompts.resolve_active_style(
+                patient_message, therapist_styles, current_user_turns
+            )
+            directive_block = """
+TURN RESPONSE DIRECTIVE (MANDATORY):
+- gentle_explore: at least 3 sentences; reflection before any question.
+- question_guidance: encourage when card has gaps and patient can engage.
+- allow_question: true — at most one soft open-ended question if natural.
+"""
+        dialogue_context = IntakePrompts._build_dialogue_context(recent_dialogue, counselor_name)
+
+        limit_context = ""
+        if max_user_turns:
+            limit_context = (
+                f"\nIntake turn limit: {max_user_turns} total user turns. "
+                f"Current (before processing this message): {current_user_turns}."
+            )
+            if current_user_turns >= max_user_turns - 1:
+                limit_context += " This may be the final intake turn."
+
+        return f"""TURN CONTEXT — process this intake turn.
+
+ACTIVE STYLE FOR THIS RESPONSE: {active_style} (MUST embody this style's language markers from SESSION CONTEXT).
+{card_gaps_block}{directive_block}
+ANTI-REPETITION FOR THIS TURN:
+- Do NOT start with the same phrases as in previous Counselor lines in RECENT DIALOGUE below.
+- Do NOT start with the patient's name unless TURN DIRECTIVE or completion warrants it.
+- Check Counselor lines in RECENT DIALOGUE before writing patient_response_ru.
+
+Current card (working draft — update fields per system rules):
+{card_json}
+
+Current user turns in intake (before processing this message): {current_user_turns}{limit_context}
+{dialogue_context}
+This turn patient message:
+{patient_message}
+
+Respond with JSON only.
+"""
 
     @staticmethod
     def get_intake_turn_prompt(
@@ -206,199 +624,84 @@ CRITICAL: You MUST follow ALL boundary checks listed above for this style."""
         patient_name: str,
         patient_age: int | None,
         patient_sex: str,
-        address_mode: str,  # formal (вы) or informal (ты)
+        address_mode: str,
         current_card: dict[str, str],
         min_user_turns: int,
         current_user_turns: int,
         required_fields: list[str],
-        max_user_turns: int | None = None,  # NEW: hard limit for intake
-        recent_dialogue: list[dict[str, str]] | None = None,  # NEW: recent dialogue window
-        avoid_patterns: list[str] | None = None,  # NEW: patterns to avoid repeating
+        max_user_turns: int | None = None,
+        recent_dialogue: list[dict[str, str]] | None = None,
+        avoid_patterns: list[str] | None = None,
         therapist_name: str = "Опора",
         therapist_gender: str = "female",
-        therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
+        therapist_styles: list[str] | None = None,
     ) -> str:
-        required_fields_json = json.dumps(required_fields, ensure_ascii=False)
-        card_json = json.dumps(current_card, ensure_ascii=False)
-        age_text = str(patient_age) if patient_age is not None else ""
-        t_name = (therapist_name or "").strip() or "Опора"
-        t_gender = therapist_gender if therapist_gender in ("female", "male") else "female"
-        # NEW: Use styles instead of traits with active style selection for this turn
-        styles = therapist_styles or []
-        styles_json = json.dumps(styles, ensure_ascii=False)
-
-        # NEW: Determine active style for this intake turn based on message content and intake stage
-        active_style = styles[0] if styles else "friendly"
-        if len(styles) > 1:
-            # Simple heuristic for intake style selection
-            if any(word in patient_message.lower() for word in ["травма", "боль", "страх", "тревога", "слезы", "ужас"]):
-                active_style = "soft" if "soft" in styles else active_style
-            elif any(word in patient_message.lower() for word in ["когда", "сколько", "часто", "симптом", "диагноз"]):
-                active_style = "business" if "business" in styles else active_style
-            elif any(word in patient_message.lower() for word in ["хочу", "цель", "изменить", "справиться", "план"]):
-                active_style = "motivating" if "motivating" in styles else active_style
-            elif current_user_turns <= 2:
-                active_style = "friendly" if "friendly" in styles else active_style
-
-        # Address mode instructions
-        address_instruction = (
-            "Use formal address (вы) - respectful, professional tone. "
-            "Example: 'Расскажите, пожалуйста', 'Как вы себя чувствуете'"
-            if address_mode == "formal"
-            else "Use informal address (ты) - friendly, casual tone. "
-                 "Example: 'Расскажи, пожалуйста', 'Как ты себя чувствуешь'"
+        """Deprecated: returns turn user prompt only. Use get_system_message + get_intake_turn_user_prompt."""
+        _ = avoid_patterns  # kept for backward-compatible signature
+        return IntakePrompts.get_intake_turn_user_prompt(
+            patient_message=patient_message,
+            current_card=current_card,
+            current_user_turns=current_user_turns,
+            recent_dialogue=recent_dialogue,
+            therapist_styles=therapist_styles,
+            therapist_name=therapist_name,
+            max_user_turns=max_user_turns,
         )
-
-        # Build recent dialogue context
-        dialogue_context = ""
-        if recent_dialogue:
-            dialogue_lines = []
-            for turn in recent_dialogue:
-                role = turn.get("role", "unknown")
-                content = turn.get("content", "")
-                if role == "user":
-                    dialogue_lines.append(f"Patient: {content}")
-                elif role == "assistant":
-                    dialogue_lines.append(f"Counselor ({t_name}): {content}")
-            if dialogue_lines:
-                dialogue_context = "\nRecent intake dialogue:\n" + "\n".join(dialogue_lines) + "\n"
-
-        # Build avoid patterns context
-        patterns_to_avoid = avoid_patterns or IntakePrompts.DEFAULT_AVOID_PATTERNS
-        avoid_context = "\nAVOID using these repetitive phrases in your response:\n"
-        avoid_context += "\n".join(f"- {p}" for p in patterns_to_avoid)
-        avoid_context += "\n\nInstead, use varied language and reference specific details from the conversation.\n"
-
-        # Intake limit context
-        limit_context = ""
-        if max_user_turns:
-            limit_context = f"\nIntake turn limit: {max_user_turns} total user turns. Current: {current_user_turns}."
-            if current_user_turns >= max_user_turns - 1:
-                limit_context += " This may be the final intake turn."
-
-        return f"""You are processing an intake turn.
-
-Context from prescreening (already chosen by the patient — use in replies; if they ask your name, you are \"{t_name}\"):
-- Counselor display name: {t_name}
-- Counselor gender (for Russian agreement in your lines): {t_gender}
-- Counselor communication styles: {styles_json}
-- ACTIVE STYLE FOR THIS RESPONSE: {active_style} (MUST embody this style's language markers)
-
-Return JSON ONLY with this exact schema:
-{{
-  "mental_health_history": "string",
-  "physical_health_history": "string",
-  "current_problems": "string",
-  "intake_hypothesis": "string",
-  "intake_hypothesis_explanation": "string",
-  "missing_fields": ["string"],
-  "is_intake_complete": true_or_false,
-  "patient_response_ru": "string"
-}}
-
-Rules for updating card fields:
-0) LANGUAGE (MANDATORY): All clinical card string fields — mental_health_history,
-   physical_health_history, current_problems, intake_hypothesis, intake_hypothesis_explanation —
-   MUST be written strictly in Russian, even if the patient writes in another language.
-   Translate relevant facts into Russian when updating the card; do not leave card fields in English
-   or mixed languages.
-1) Update fields only when patient provided enough new evidence; otherwise keep previous values.
-2) Keep hypothesis as preliminary and uncertain; never claim official diagnosis.
-3) Intake can be complete only if:
-   - user_turns_after_processing >= {min_user_turns}
-   - all required fields are filled: {required_fields_json}
-   - OR maximum intake turns reached (if applicable)
-
-Rules for generating patient_response_ru (CRITICAL - READ CAREFULLY):
-
-ADAPTIVE LENGTH:
-- Match your response length to the emotional depth of the patient's message.
-- For brief factual answers: 1-2 sentences with empathetic acknowledgment + concise question.
-- For emotional or detailed sharing: 3-5 sentences showing genuine engagement, referencing specific details they shared, then a thoughtful follow-up.
-- NEVER force a fixed length - let the content guide you.
-
-ANTI-REPETITION (MANDATORY):
-{avoid_context}
-- Do NOT start with the same phrases as in previous counselor responses above.
-- Do NOT use "Я понимаю" / "Я вас услышал" / "Я понял вас" more than once in the entire intake session.
-- Reference specific details from what the patient just said to show you're truly listening.
-- Vary your opening: sometimes acknowledge emotions directly, sometimes ask a clarifying question, sometimes reflect back what you heard.
-
-CONTEXT AWARENESS:
-- Build upon previous questions and answers - don't treat each turn as isolated.
-- If patient is expanding on a previous topic, explore deeper rather than jumping to unrelated questions.
-- Show continuity: "Вы упомянули ранее..." / "Как вы уже говорили..." when referencing earlier parts of conversation.
-
-OPEN-ENDED QUESTIONS (MANDATORY):
-- Use OPEN-ENDED questions that invite exploration, not specific answers.
-- Good examples: "Что привело тебя сюда сегодня?", "Как ты себя чувствуешь?", "Что это значит для тебя?"
-- Bad examples (directive/closed): "Ты чувствуешь тревогу?", "Тебе стоит попробовать медитацию", "Расскажи мне про травму"
-- Avoid directive language: "нужно", "должен", "следует", "обязан" — these impose external standards
-- Let the patient determine what is important to share; don't push for specific information
-
-QUESTION QUALITY:
-- Questions should feel natural, not like a checklist or interrogation.
-- Avoid generic "А что еще?" / "Что-нибудь еще?" - be specific based on what they already shared.
-- One question per response maximum - make it count.
-- Focus on feelings and experiences, not just facts: "Как ты себя чувствовал?" vs "Когда это было?"
-- Follow the patient's lead — if they open up about something, explore that rather than forcing your agenda
-- Address mode: {address_instruction}
-
-COMPLETION MESSAGE (when is_intake_complete is true):
-- Must acknowledge reaching understanding, summarize key points naturally (not as a list).
-- Include the preliminary hypothesis with explanation, emphasizing it's preliminary.
-- Transition smoothly to ongoing therapy phase.
-- Address the patient by name if available.
-
-SAFETY:
-- Never output markdown fences, comments, or extra keys in JSON.
-- If the patient asks your name or who is speaking, patient_response_ru must use counselor name \"{t_name}\" and must NOT say you are an AI/bot/ассистент.
-
-Patient profile (from prescreening):
-- name: {patient_name}
-- age: {age_text}
-- sex: {patient_sex}
-
-Current card:
-{card_json}
-
-Current user turns in intake: {current_user_turns}{limit_context}{dialogue_context}
-
-This turn patient message:
-{patient_message}
-"""
 
     @staticmethod
     def get_fallback_intake_response(
         patient_name: str = "",
         address_mode: str = "formal",
         therapist_gender: str = "female",
+        patient_message: str = "",
     ) -> str:
-        """Get fallback response adapted to address mode with varied phrasing."""
+        """Multi-sentence fallback when intake LLM fails — no template one-line questions."""
         import random
 
-        name_prefix = f"{patient_name}, " if patient_name else ""
-        is_female = therapist_gender == "female"
+        _ = therapist_gender  # kept for API compatibility
+        msg = (patient_message or "").strip()
+        if msg:
+            snippet = msg[:120] + ("…" if len(msg) > 120 else "")
+            if address_mode == "informal":
+                reflect = f"Я услышал{'а' if therapist_gender == 'female' else ''}, что ты написал{'(а)' if len(msg) < 3 else ''}: «{snippet}». "
+                body = (
+                    f"{reflect}"
+                    "Мне важно понять это глубже, в твоём темпе. "
+                    "Можешь чуть подробнее рассказать, что для тебя сейчас самое ощутимое в этом?"
+                )
+            else:
+                reflect = f"Я услышал{'а' if therapist_gender == 'female' else ''} ваше сообщение: «{snippet}». "
+                body = (
+                    f"{reflect}"
+                    "Мне важно понять это глубже, в вашем темпе. "
+                    "Можете чуть подробнее рассказать, что для вас сейчас самое ощутимое в этом?"
+                )
+            return body
 
         if address_mode == "informal":
-            # Informal (ты) - varied options with open-ended, non-directive questions
-            informal_openings = [
-                f"{name_prefix}что привело тебя к нашему разговору сегодня?",
-                f"{name_prefix}с чего бы ты хотел{'а' if is_female else ''} начать?",
-                f"{name_prefix}как ты себя чувствуешь в последнее время?",
-                f"{name_prefix}что занимает твои мысли больше всего сейчас?",
-                f"{name_prefix}какие переживания привели тебя сюда?",
-                f"{name_prefix}что для тебя важно, чтобы мы обсудили?",
+            options = [
+                (
+                    "Спасибо, что написал. Я здесь, чтобы спокойно разобраться с тем, "
+                    "что для тебя сейчас важно — без спешки и без оценок. "
+                    "Расскажи, пожалуйста, что больше всего занимает тебя в последнее время."
+                ),
+                (
+                    "Хорошо, что ты обратился. На этом этапе мне важно просто услышать тебя — "
+                    "как ты себя чувствуешь и что принесло сюда. "
+                    "С чего тебе комфортнее начать?"
+                ),
             ]
-            return random.choice(informal_openings)
         else:
-            # Formal (вы) - default, varied options with open-ended, non-directive questions
-            formal_openings = [
-                f"{name_prefix}что привело вас к нашему разговору сегодня?",
-                f"{name_prefix}с чего бы вы хотели начать?",
-                f"{name_prefix}как вы себя чувствуете в последнее время?",
-                f"{name_prefix}что занимает ваши мысли больше всего сейчас?",
-                f"{name_prefix}какие переживания привели вас сюда?",
-                f"{name_prefix}что для вас важно, чтобы мы обсудили?",
+            options = [
+                (
+                    "Спасибо, что написали. Я здесь, чтобы спокойно разобраться с тем, "
+                    "что для вас сейчас важно — без спешки и без оценок. "
+                    "Расскажите, пожалуйста, что больше всего занимает вас в последнее время."
+                ),
+                (
+                    "Хорошо, что вы обратились. На этом этапе мне важно просто услышать вас — "
+                    "как вы себя чувствуете и что принесло сюда. "
+                    "С чего вам комфортнее начать?"
+                ),
             ]
-            return random.choice(formal_openings)
+        return random.choice(options)
