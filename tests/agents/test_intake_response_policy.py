@@ -1,134 +1,85 @@
 """Unit tests for IntakeResponsePolicy."""
 
+from agents.evaluators.structured_outputs import DialogueSignalResult
 from agents.intake.response_policy import IntakeResponsePolicy
 from agents.prompts.intake_prompts import IntakePrompts
 
 
-def test_crisis_intensity_defer():
+def test_crisis_signal_defer():
     directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Мне очень тяжело, я не могу больше",
+        signal=DialogueSignalResult(
+            primary_emotion="sadness",
+            emotional_intensity=0.95,
+            crisis_signal=True,
+            question_guidance="defer",
+            recommended_response_mode="hold_space",
+        ),
         therapist_styles=["friendly", "soft"],
-        current_user_turns=2,
-        primary_emotion="sadness",
-        emotional_intensity=0.95,
         missing_fields=["current_problems"],
-        recent_dialogue=None,
-        hold_emotion_intensity_threshold=0.95,
     )
     assert directives.response_mode == "hold_space"
     assert directives.question_guidance == "defer"
-    assert directives.pushback_type == "none"
     assert directives.allow_question is False
+    assert directives.crisis_signal is True
 
 
-def test_moderate_sadness_still_encourages_question():
+def test_moderate_distress_still_encourages_question_when_gaps_remain():
     directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Мне грустно и тревожно на работе",
+        signal=DialogueSignalResult(
+            primary_emotion="sadness",
+            emotional_intensity=0.8,
+            active_style="soft",
+            question_guidance="encourage",
+            recommended_response_mode="structured_gather",
+        ),
         therapist_styles=["friendly", "soft"],
-        current_user_turns=2,
-        primary_emotion="sadness",
-        emotional_intensity=0.8,
         missing_fields=["current_problems"],
-        recent_dialogue=None,
-        hold_emotion_intensity_threshold=0.95,
     )
     assert directives.question_guidance == "encourage"
-    assert directives.pushback_type == "none"
     assert directives.allow_question is True
-    assert "Still end with ONE soft open-ended question" in directives.directive_en
+    assert directives.active_style == "soft"
+    assert directives.suggested_focus_field == "current_problems"
 
 
-def test_stage_pushback_why_so_many_questions():
+def test_stage_pushback_defer():
     directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Почему вы постоянно задаёте вопросы?",
+        signal=DialogueSignalResult(
+            pushback_type="stage",
+            advice_request=True,
+            question_guidance="defer",
+            recommended_response_mode="hold_space",
+        ),
         therapist_styles=["friendly"],
-        current_user_turns=3,
-        primary_emotion="anger",
-        emotional_intensity=0.5,
         missing_fields=["current_problems"],
-        recent_dialogue=None,
     )
     assert directives.pushback_type == "stage"
     assert directives.question_guidance == "defer"
     assert directives.allow_question is False
-    assert "INTAKE_STAGE_PUSHBACK_HANDLING" in directives.directive_en
-
-
-def test_stage_pushback_advice_request():
-    directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Скажите что мне делать, хочу улучшить себя",
-        therapist_styles=["friendly"],
-        current_user_turns=2,
-        primary_emotion="neutral",
-        emotional_intensity=0.3,
-        missing_fields=["current_problems"],
-        recent_dialogue=None,
-    )
-    assert directives.pushback_type == "stage"
-    assert directives.question_guidance == "defer"
-    assert "upcoming" in directives.directive_en.lower() or "INTAKE_STAGE" in directives.directive_en
 
 
 def test_hard_question_stop_defer():
     directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Перестаньте спрашивать, пожалуйста",
+        signal=DialogueSignalResult(
+            pushback_type="hard_stop",
+            question_stop=True,
+            question_guidance="defer",
+        ),
         therapist_styles=["friendly"],
-        current_user_turns=4,
-        primary_emotion="anger",
-        emotional_intensity=0.5,
         missing_fields=["current_problems"],
-        recent_dialogue=None,
     )
     assert directives.pushback_type == "hard_stop"
     assert directives.question_guidance == "defer"
-    assert "stop questions" in directives.directive_en.lower()
-
-
-def test_hvatit_voprosov_triggers_stage_not_hard_stop():
-    directives = IntakeResponsePolicy.compute_directives(
-        patient_message="Хватит вопросов, я устал",
-        therapist_styles=["friendly"],
-        current_user_turns=4,
-        primary_emotion="anger",
-        emotional_intensity=0.5,
-        missing_fields=["current_problems"],
-        recent_dialogue=None,
-    )
-    assert directives.pushback_type == "stage"
-    assert "INTAKE_STAGE_PUSHBACK_HANDLING" in directives.directive_en
-
-
-def test_many_counselor_questions_still_encourage():
-    dialogue = [
-        {"role": "user", "content": "работаю программистом"},
-        {"role": "assistant", "content": "Расскажите подробнее?"},
-        {"role": "user", "content": "уже пять лет"},
-        {"role": "assistant", "content": "А как вы себя чувствуете?"},
-        {"role": "user", "content": "нормально"},
-        {"role": "assistant", "content": "Что для вас важно?"},
-    ]
-    directives = IntakeResponsePolicy.compute_directives(
-        patient_message="нормально",
-        therapist_styles=["business"],
-        current_user_turns=3,
-        primary_emotion="neutral",
-        emotional_intensity=0.2,
-        missing_fields=["current_problems"],
-        recent_dialogue=dialogue,
-    )
-    assert directives.question_guidance == "encourage"
-    assert directives.pushback_type == "none"
+    assert "no questions" in directives.directive_en.lower()
 
 
 def test_missing_fields_structured_gather_encourage():
     directives = IntakeResponsePolicy.compute_directives(
-        patient_message="работаю программистом",
+        signal=DialogueSignalResult(
+            question_guidance="encourage",
+            recommended_response_mode="structured_gather",
+        ),
         therapist_styles=["friendly"],
-        current_user_turns=1,
-        primary_emotion="neutral",
-        emotional_intensity=0.2,
         missing_fields=["mental_health_history"],
-        recent_dialogue=None,
     )
     assert directives.response_mode == "structured_gather"
     assert directives.question_guidance == "encourage"

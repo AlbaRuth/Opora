@@ -1,15 +1,19 @@
-"""
-TherapistEvaluator - preserved logic from original Opora.
-All prompts and evaluation logic kept exactly as in original.
-"""
+"""Therapist evaluator tasks and structured response parsing."""
 
 import json
-import re
 from typing import Any, Dict
 
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
 from agents.prompts.evaluator_prompts import EvaluatorPrompts
+from agents.evaluators.dialogue_signal_analyzer import DialogueSignalAnalyzer
+from agents.evaluators.structured_outputs import (
+    EmotionAssessmentResult,
+    ResponseStrategyResult,
+    TherapyProgressResult,
+    extract_json_object,
+    validate_model,
+)
 from db.session import get_db_session
 from db.repositories import SessionRepository, MessageRepository, DecisionLogRepository
 from services.llm import LlmGateway
@@ -26,14 +30,13 @@ class TherapistEvaluator:
     def __init__(self):
         self.settings = get_settings()
         self.llm_gateway = LlmGateway()
+        self.signal_analyzer = DialogueSignalAnalyzer(self.llm_gateway)
     
     def _parse_response(self, response: Any) -> Any:
-        """Parse LLM response - handles both string and object responses."""
+        """Parse LLM response without regex cleanup."""
         if isinstance(response, str):
-            cleaned = re.sub(r'^\s*```(json)?|```\s*$', '', response, flags=re.IGNORECASE).strip()
-            if cleaned.startswith('{') and cleaned.endswith('}'):
-                return json.loads(cleaned)
-            return cleaned
+            parsed = extract_json_object(response)
+            return parsed if parsed else response.strip()
         return response
     
     async def _call_llm(
@@ -93,25 +96,13 @@ class TherapistEvaluator:
         Evaluate if patient is rejecting or deviating from topic.
         Original logic from evaluation.py lines 156-180.
         """
-        prompt = EvaluatorPrompts.CLIENT_REACTION.format(patient_input=patient_input)
-        
-        response_result = await self._call_llm(
-            prompt=prompt,
-            task_name="evaluate_client_reaction",
-        )
-        response = response_result.get("content", "")
-        
-        await self._log_agent_call(
-            user_id=user_id,
-            task_name="evaluate_client_reaction",
-            prompt=prompt,
-            result=response_result,
+        signal = await self.signal_analyzer.analyze(
+            patient_message=patient_input,
+            account_id=user_id,
             session_id=session_id,
+            current_phase="therapy",
         )
-        
-        if isinstance(response, str):
-            return response.lower() == "true"
-        return False
+        return signal.pushback_type != "none" or signal.advice_request or signal.question_stop
     
     async def assess_emotion(
         self,
@@ -140,12 +131,13 @@ class TherapistEvaluator:
         )
         
         try:
-            result = self._parse_response(response)
+            parsed = validate_model(EmotionAssessmentResult, response)
+            result = parsed if isinstance(parsed, EmotionAssessmentResult) else None
             return {
-                "primary_emotion": result.get("primary_emotion", ""),
-                "emotional_intensity": float(result.get("emotional_intensity", 0.0)),
+                "primary_emotion": result.primary_emotion if result else "",
+                "emotional_intensity": result.emotional_intensity if result else 0.0,
             }
-        except (json.JSONDecodeError, AttributeError) as e:
+        except (json.JSONDecodeError, AttributeError, ValueError) as e:
             logger.warning("failed_to_parse_emotion", error=str(e), response=response)
             return {
                 "primary_emotion": "",
@@ -194,12 +186,13 @@ class TherapistEvaluator:
         )
         
         try:
-            result = self._parse_response(response)
+            parsed = validate_model(ResponseStrategyResult, response)
+            result = parsed if isinstance(parsed, ResponseStrategyResult) else None
             return {
-                "strategy": result.get("strategy", ""),
-                "strategy_text": result.get("strategy_text", ""),
+                "strategy": result.strategy if result else "",
+                "strategy_text": result.strategy_text if result else "",
             }
-        except (json.JSONDecodeError, AttributeError) as e:
+        except (json.JSONDecodeError, AttributeError, ValueError) as e:
             logger.warning("failed_to_parse_strategy", error=str(e), response=response)
             return {
                 "strategy": "",
@@ -273,23 +266,14 @@ class TherapistEvaluator:
         Determine if session should end.
         Original logic from evaluation.py lines 360-372.
         """
-        prompt = EvaluatorPrompts.SESSION_END.format(patient_input=patient_input)
-        
-        response_result = await self._call_llm(
-            prompt=prompt,
-            task_name="should_end_session",
-        )
-        response = response_result.get("content", "")
-        
-        await self._log_agent_call(
-            user_id=user_id,
-            task_name="should_end_session",
-            prompt=prompt,
-            result=response_result,
+        _ = dialog_count
+        signal = await self.signal_analyzer.analyze(
+            patient_message=patient_input,
+            account_id=user_id,
             session_id=session_id,
+            current_phase="therapy",
         )
-        
-        return response.strip().lower() == "true"
+        return signal.session_end_intent
     
     async def evaluate_therapy_progress(
         self,
@@ -325,10 +309,11 @@ class TherapistEvaluator:
         )
         
         try:
-            result = self._parse_response(response)
+            parsed = validate_model(TherapyProgressResult, response)
+            result = parsed if isinstance(parsed, TherapyProgressResult) else None
             return {
-                "new_therapy": result.get("new_therapy", "cognitive-behavioral therapy"),
-                "reason": result.get("reason", "maintain the original therapy"),
+                "new_therapy": result.new_therapy if result else "cognitive-behavioral therapy",
+                "reason": result.reason if result else "maintain the original therapy",
             }
         except (json.JSONDecodeError, AttributeError) as e:
             logger.warning("failed_to_parse_therapy_progress", error=str(e))

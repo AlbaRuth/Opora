@@ -14,7 +14,7 @@ from core.logging import LogContexts, get_logger
 from db.repositories import ClinicalProfileRepository, MessageRepository
 from db.session import get_db_session
 
-from agents.evaluators.therapist_evaluator import TherapistEvaluator
+from agents.evaluators.dialogue_signal_analyzer import DialogueSignalAnalyzer
 from agents.intake.response_policy import IntakeResponsePolicy
 from agents.prompts.intake_prompts import IntakePrompts
 from services.llm import LlmGateway
@@ -30,7 +30,7 @@ class IntakeAgent:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.llm_gateway = LlmGateway()
-        self.evaluator = TherapistEvaluator()
+        self.signal_analyzer = DialogueSignalAnalyzer()
 
     def _compute_max_user_turns(self) -> int | None:
         """Compute maximum user turns for intake based on settings."""
@@ -93,37 +93,24 @@ class IntakeAgent:
                     limit=context_window_size,
                 )
 
-            primary_emotion = ""
-            emotional_intensity = 0.0
-            if self.settings.intake_emotion_eval_enabled:
-                emotion_result = await self.evaluator.assess_emotion(
-                    patient_text,
-                    account_id,
-                    state.session_db_id,
-                )
-                if isinstance(emotion_result, dict):
-                    primary_emotion = str(emotion_result.get("primary_emotion", "") or "")
-                    try:
-                        emotional_intensity = float(
-                            emotion_result.get("emotional_intensity", 0.0) or 0.0
-                        )
-                    except (TypeError, ValueError):
-                        emotional_intensity = 0.0
-
             missing_before = self._missing_required_fields(current_card)
-            turn_directives = IntakeResponsePolicy.compute_directives(
+            signal = await self.signal_analyzer.analyze(
                 patient_message=patient_text,
+                account_id=account_id,
+                session_id=state.session_db_id,
+                recent_dialogue=recent_dialogue,
                 therapist_styles=state.therapist_styles,
+                current_phase="intake",
                 current_user_turns=state.intake_user_turns,
-                primary_emotion=primary_emotion,
-                emotional_intensity=emotional_intensity,
+                missing_fields=missing_before,
+                max_user_turns=max_user_turns,
+            )
+            turn_directives = IntakeResponsePolicy.compute_directives(
+                signal=signal,
+                therapist_styles=state.therapist_styles,
                 missing_fields=missing_before,
                 min_sentences=self.settings.intake_min_response_sentences,
                 max_question_words=self.settings.intake_max_question_words,
-                hold_emotion_intensity_threshold=(
-                    self.settings.intake_hold_emotion_intensity_threshold
-                ),
-                max_user_turns=max_user_turns,
             )
 
             system_prompt = IntakePrompts.get_system_message(
@@ -152,13 +139,18 @@ class IntakeAgent:
             )
 
             intake_strategy = {
-                "primary_emotion": primary_emotion,
-                "emotional_intensity": emotional_intensity,
+                "primary_emotion": signal.primary_emotion,
+                "emotional_intensity": signal.emotional_intensity,
                 "response_mode": turn_directives.response_mode,
                 "question_guidance": turn_directives.question_guidance,
                 "allow_question": turn_directives.allow_question,
                 "pushback_type": turn_directives.pushback_type,
                 "active_style": turn_directives.active_style,
+                "crisis_signal": signal.crisis_signal,
+                "advice_request": signal.advice_request,
+                "question_stop": signal.question_stop,
+                "confidence": signal.confidence,
+                "rationale_short": signal.rationale_short,
                 "missing_fields_count": len(missing_before),
                 "suggested_focus_field": turn_directives.suggested_focus_field,
             }
@@ -176,6 +168,7 @@ class IntakeAgent:
                 "therapist_name": state.therapist_name,
                 "max_user_turns": max_user_turns,
                 "turn_directives": turn_directives.__dict__,
+                "dialogue_signal": signal.model_dump(),
                 "missing_fields": missing_before,
                 "required_fields": self.settings.intake_required_fields_list,
             }
@@ -253,12 +246,17 @@ class IntakeAgent:
                     "initial_info_insufficient": initial_info_insufficient,
                     "patient_sex": state.patient_sex,
                     "address_mode": state.address_mode,
-                    "primary_emotion": primary_emotion,
-                    "emotional_intensity": emotional_intensity,
+                    "primary_emotion": signal.primary_emotion,
+                    "emotional_intensity": signal.emotional_intensity,
                     "response_mode": turn_directives.response_mode,
                     "question_guidance": turn_directives.question_guidance,
                     "allow_question": turn_directives.allow_question,
                     "pushback_type": turn_directives.pushback_type,
+                    "crisis_signal": signal.crisis_signal,
+                    "advice_request": signal.advice_request,
+                    "question_stop": signal.question_stop,
+                    "signal_confidence": signal.confidence,
+                    "signal_rationale": signal.rationale_short,
                     "suggested_focus_field": turn_directives.suggested_focus_field,
                     "missing_fields_count": len(missing_before),
                 },

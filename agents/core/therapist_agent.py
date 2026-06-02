@@ -1,7 +1,4 @@
-"""
-TherapistAgent - preserved logic from original Opora.
-Original implementation from agent/main.py lines 39-289.
-"""
+"""Main therapist agent for Opora dialogue generation."""
 
 from typing import Any, Dict
 
@@ -24,10 +21,7 @@ logger = get_logger(LogContexts.AGENT)
 
 
 class TherapistAgent:
-    """
-    Main therapist agent for Opora.
-    Original logic from Opora agent/main.py preserved exactly.
-    """
+    """Main therapist agent for Opora."""
     
     def __init__(self):
         self.settings = get_settings()
@@ -150,10 +144,7 @@ class TherapistAgent:
         patient_response: Dict[str, Any],
         state: SessionState,
     ) -> Dict[str, Any]:
-        """
-        Process patient input and generate response.
-        Original logic from main.py lines 112-204.
-        """
+        """Process patient input and generate response."""
         patient_text = patient_response["text"]
         patient_attitude = patient_response.get("attitude", "neutral")
         
@@ -169,32 +160,22 @@ class TherapistAgent:
         
         user_id_int = int(state.patient_id) if state.patient_id else 0
         
-        # Evaluate all conditions (async calls)
-        should_end = await self.evaluator.should_end_session(
-            patient_text,
-            state.dialog_count,
-            user_id_int,
-            state.session_db_id,
+        signal = await self.evaluator.signal_analyzer.analyze(
+            patient_message=patient_text,
+            account_id=user_id_int,
+            session_id=state.session_db_id,
+            therapist_styles=state.therapist_styles,
+            current_phase="therapy",
         )
-        
-        is_rejecting = await self.evaluator.evaluate_client_reaction(
-            patient_text,
-            user_id_int,
-            state.session_db_id,
+        should_end = signal.session_end_intent
+        is_rejecting = (
+            signal.pushback_type != "none"
+            or signal.advice_request
+            or signal.question_stop
         )
-        
-        emotion_result = await self.evaluator.assess_emotion(
-            patient_text,
-            user_id_int,
-            state.session_db_id,
-        )
-        
-        if not isinstance(emotion_result, dict):
-            emotion_result = {}
-        
         emotion_data = {
-            "primary_emotion": emotion_result.get("primary_emotion", ""),
-            "emotional_intensity": float(emotion_result.get("emotional_intensity", 0.0)),
+            "primary_emotion": signal.primary_emotion,
+            "emotional_intensity": signal.emotional_intensity,
         }
         
         # Get memory result - need sessions data from DB
@@ -250,6 +231,7 @@ class TherapistAgent:
         strategy = {
             "strategy": strategy_result.get("strategy", ""),
             "strategy_text": strategy_result.get("strategy_text", ""),
+            "active_style": signal.active_style,
         }
         
         # Generate response
@@ -270,8 +252,9 @@ class TherapistAgent:
             "Whether to Reject or Deviate": is_rejecting,
             "Current Therapy": state.current_therapy,
             "Current Stage": current_stage,
-            "Primary Emotion": emotion_result.get("primary_emotion", ""),
-            "Emotional Intensity": emotion_result.get("emotional_intensity", 0.0),
+            "Primary Emotion": signal.primary_emotion,
+            "Emotional Intensity": signal.emotional_intensity,
+            "Dialogue Signal": signal.model_dump(),
             "Response Strategy": strategy_result.get("strategy", ""),
             "Strategy Description": strategy_result.get("strategy_text", ""),
             "Attitude": patient_attitude,
@@ -286,8 +269,8 @@ class TherapistAgent:
                 is_rejecting=is_rejecting,
                 current_therapy=state.current_therapy,
                 current_stage=current_stage,
-                primary_emotion=emotion_result.get("primary_emotion"),
-                emotional_intensity=emotion_result.get("emotional_intensity"),
+                primary_emotion=signal.primary_emotion,
+                emotional_intensity=signal.emotional_intensity,
                 response_strategy=strategy_result.get("strategy"),
                 strategy_description=strategy_result.get("strategy_text"),
                 patient_attitude=patient_attitude,
@@ -312,10 +295,7 @@ class TherapistAgent:
         user_id: int,
         state: SessionState,
     ) -> str:
-        """
-        Generate therapist response.
-        Original logic from main.py lines 215-289.
-        """
+        """Generate therapist response."""
         # Get session memory for context
         session_memory = {"dialogs": []}
         if state.session_id and state.session_db_id:
@@ -335,6 +315,7 @@ class TherapistAgent:
         emotional_intensity = emotion_data.get("emotional_intensity", 0.0)
         current_strategy = strategy.get("strategy", "")
         current_strategy_text = strategy.get("strategy_text", "")
+        active_style = strategy.get("active_style")
         
         # Build personalized system message and prompt
         # NEW: Include address_mode and styles in system message and prompt
@@ -354,6 +335,7 @@ class TherapistAgent:
             "current_stage": current_stage,
             "current_strategy": current_strategy,
             "current_strategy_text": current_strategy_text,
+            "active_style": active_style,
             "session_memory": session_memory,
             "therapist_name": state.therapist_name,
             "patient_display_name": state.patient_display_name,
@@ -379,6 +361,7 @@ class TherapistAgent:
             patient_sex=state.patient_sex,  # NEW
             therapist_styles=state.therapist_styles,  # NEW: styles instead of traits
             address_mode=state.address_mode,  # NEW
+            active_style=active_style,
         )
 
         prompt_messages = [

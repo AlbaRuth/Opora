@@ -236,6 +236,7 @@ Always respond in a way that reflects your active communication style for this s
         patient_sex: str = "prefer_not_to_say",  # NEW
         therapist_styles: list[str] | None = None,  # NEW: styles instead of traits
         address_mode: str = "formal",  # NEW
+        active_style: str | None = None,
     ) -> str:
         """
         Build response generation prompt with personalization.
@@ -263,24 +264,13 @@ Always respond in a way that reflects your active communication style for this s
         # NEW: Build styles context with active style selection guidance
         styles = therapist_styles or []
         if styles:
-            # Determine active style based on context (for prompting clarity)
-            active_style = styles[0]  # Default to first
-            if len(styles) > 1:
-                # Simple heuristics for active style selection (documented in prompt)
-                if primary_emotion in ["sadness", "anxiety", "fear", "anger"] and emotional_intensity > 0.7:
-                    active_style = "soft" if "soft" in styles else styles[0]
-                elif current_strategy in ["action_plan", "technique", "cbt"]:
-                    active_style = "business" if "business" in styles else styles[0]
-                elif current_strategy in ["goal_setting", "strength_focus", "encouragement"]:
-                    active_style = "motivating" if "motivating" in styles else styles[0]
-                elif current_strategy in ["rapport", "greeting", "check_in"]:
-                    active_style = "friendly" if "friendly" in styles else styles[0]
+            resolved_active_style = active_style if active_style in styles else styles[0]
 
             style_info = [f"- {s}: {TherapistPrompts.STYLE_GUIDELINES.get(s, {}).get('description', s)}" for s in styles]
             personalization += "\n\nYour available communication styles:\n" + "\n".join(style_info)
-            personalization += f"\n\nACTIVE STYLE FOR THIS RESPONSE: {active_style}"
-            if active_style in TherapistPrompts.STYLE_GUIDELINES:
-                sg = TherapistPrompts.STYLE_GUIDELINES[active_style]
+            personalization += f"\n\nACTIVE STYLE FOR THIS RESPONSE: {resolved_active_style}"
+            if resolved_active_style in TherapistPrompts.STYLE_GUIDELINES:
+                sg = TherapistPrompts.STYLE_GUIDELINES[resolved_active_style]
                 markers = "; ".join(sg["language_markers"][:3])  # Show top 3 markers
                 personalization += f"\nUse these language markers: {markers}"
 

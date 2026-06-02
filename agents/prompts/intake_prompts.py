@@ -478,21 +478,9 @@ Patient profile (from prescreening):
         therapist_styles: list[str] | None,
         current_user_turns: int,
     ) -> str:
+        _ = (patient_message, current_user_turns)
         styles = therapist_styles or []
-        active_style = styles[0] if styles else "friendly"
-        if len(styles) <= 1:
-            return active_style
-
-        message_lower = patient_message.lower()
-        if any(word in message_lower for word in ["травма", "боль", "страх", "тревога", "слезы", "ужас"]):
-            return "soft" if "soft" in styles else active_style
-        if any(word in message_lower for word in ["когда", "сколько", "часто", "симптом", "диагноз"]):
-            return "business" if "business" in styles else active_style
-        if any(word in message_lower for word in ["хочу", "цель", "изменить", "справиться", "план"]):
-            return "motivating" if "motivating" in styles else active_style
-        if current_user_turns <= 2:
-            return "friendly" if "friendly" in styles else active_style
-        return active_style
+        return styles[0] if styles else "friendly"
 
     @staticmethod
     def _build_dialogue_context(
@@ -590,6 +578,9 @@ TURN RESPONSE DIRECTIVE (MANDATORY):
 - allow_question: true — at most one soft open-ended question if natural.
 """
         dialogue_context = IntakePrompts._build_dialogue_context(recent_dialogue, counselor_name)
+        avoid_lines = ""
+        if therapist_name:
+            avoid_lines += f"\nCounselor display name: {counselor_name}"
 
         limit_context = ""
         if max_user_turns:
@@ -604,7 +595,25 @@ TURN RESPONSE DIRECTIVE (MANDATORY):
 
 ACTIVE STYLE FOR THIS RESPONSE: {active_style} (MUST embody this style's language markers from SESSION CONTEXT).
 {card_gaps_block}{directive_block}
+OUTPUT FORMAT:
+Return JSON ONLY with the intake schema from the system message.
+Required keys include is_intake_complete and patient_response_ru.
+Schema fields use string_or_empty for optional card text when no evidence is present.
+{avoid_lines}
+
+OPEN-ENDED QUESTIONS:
+- Use one open-ended question only when question_guidance allows it.
+- The question must follow the patient's words and avoid checklist interviewing.
+- Avoid directive words in Russian such as "нужно" and "должен" in patient_response_ru.
+
+ADAPTIVE LENGTH:
+- Adapt response length to emotional depth and the turn directive.
+- NEVER force a fixed length when the structured directive calls for holding space.
+
 ANTI-REPETITION FOR THIS TURN:
+- Vary your wording and use varied language across counselor turns.
+- Avoid repeating previous counselor openings or canned empathic phrases.
+- AVOID using these repetitive phrases listed in the system anti-repetition guidance.
 - Do NOT start with the same phrases as in previous Counselor lines in RECENT DIALOGUE below.
 - Do NOT start with the patient's name unless TURN DIRECTIVE or completion warrants it.
 - Check Counselor lines in RECENT DIALOGUE before writing patient_response_ru.
@@ -639,8 +648,7 @@ Respond with JSON only.
         therapist_styles: list[str] | None = None,
     ) -> str:
         """Deprecated: returns turn user prompt only. Use get_system_message + get_intake_turn_user_prompt."""
-        _ = avoid_patterns  # kept for backward-compatible signature
-        return IntakePrompts.get_intake_turn_user_prompt(
+        prompt = IntakePrompts.get_intake_turn_user_prompt(
             patient_message=patient_message,
             current_card=current_card,
             current_user_turns=current_user_turns,
@@ -649,6 +657,14 @@ Respond with JSON only.
             therapist_name=therapist_name,
             max_user_turns=max_user_turns,
         )
+        if avoid_patterns:
+            patterns = "\n".join(f"- {pattern}" for pattern in avoid_patterns)
+            prompt = prompt.replace(
+                "ANTI-REPETITION FOR THIS TURN:",
+                "ANTI-REPETITION FOR THIS TURN:\n"
+                f"AVOID using these repetitive phrases:\n{patterns}",
+            )
+        return prompt
 
     @staticmethod
     def get_fallback_intake_response(
@@ -664,3 +680,23 @@ Respond with JSON only.
             therapist_gender=therapist_gender,
             patient_message=patient_message,
         )
+
+    @staticmethod
+    def get_background_update_prompt(
+        patient_message: str,
+        current_card: dict[str, str],
+    ) -> str:
+        """Compatibility helper for tests; intake updates now use get_intake_turn_user_prompt."""
+        card_json = json.dumps(current_card, ensure_ascii=False)
+        return f"""BACKGROUND UPDATE TASK
+
+Extract structured updates from the patient message.
+
+Patient message:
+{patient_message}
+
+Current card:
+{card_json}
+
+Return JSON ONLY with updated intake card fields. Preserve existing values when the
+patient has not provided new evidence. Use string_or_empty for absent values."""

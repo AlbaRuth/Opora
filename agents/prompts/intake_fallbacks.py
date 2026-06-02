@@ -54,5 +54,6 @@ def build_intake_fallback_response(
                 "С чего вам комфортнее начать?"
             ),
         ]
-    return random.choice(options)
+    selected = random.choice(options)
+    return selected if selected.rstrip().endswith("?") else f"{selected.rstrip()}?"
 

@@ -1,5 +1,11 @@
 """Services module for Opora."""
 
-from .dialogue_service import DialogueService
-
 __all__ = ["DialogueService"]
+
+
+def __getattr__(name: str):
+    if name == "DialogueService":
+        from .dialogue_service import DialogueService
+
+        return DialogueService
+    raise AttributeError(name)

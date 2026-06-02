@@ -1,10 +1,7 @@
-"""
-Turn-level response directives for IntakeAgent.
+"""Turn-level response directives for IntakeAgent.
 
-Returns modes and constraints for the LLM — never canned patient-facing questions.
-
-Intake note: emotion evaluation informs tone and reflection length, but must NOT
-suppress questions except true crisis or explicit patient pushback on questioning.
+This module does not inspect patient text. Meaning-level interpretation is produced by
+DialogueSignalAnalyzer and this policy only maps structured signals to prompt directives.
 """
 
 from __future__ import annotations
@@ -12,69 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from agents.prompts.intake_prompts import IntakePrompts
+from agents.evaluators.structured_outputs import DialogueSignalResult
 
 ResponseMode = Literal["hold_space", "gentle_explore", "structured_gather"]
 QuestionGuidance = Literal["encourage", "optional", "defer"]
 PushbackType = Literal["none", "stage", "hard_stop"]
-
-_NEGATIVE_EMOTIONS = frozenset({"sadness", "anxiety", "fear", "anger", "disgust", "hurt"})
-_CRISIS_KEYWORDS = (
-    "не могу больше",
-    "не хочу жить",
-    "хочу умереть",
-    "хочу покончить",
-    "покончить с собой",
-    "покончить с жизнью",
-    "суицид",
-    "самоубийств",
-    "убью себя",
-    "кончаю с собой",
-    "лучше бы меня не было",
-)
-_STAGE_PUSHBACK_KEYWORDS = (
-    "почему столько вопрос",
-    "почему вы постоянно спрашива",
-    "почему ты постоянно спрашива",
-    "почему так много вопрос",
-    "зачем столько вопрос",
-    "зачем вы спрашива",
-    "зачем ты спрашива",
-    "хватит вопрос",
-    "хватит допрашивать",
-    "хватит меня допрашивать",
-    "достало вопрос",
-    "слишком много вопрос",
-    "постоянно спрашиваете",
-    "постоянно спрашиваешь",
-    "постоянно задаёте",
-    "постоянно задаете",
-    "задаёте вопрос",
-    "задаете вопрос",
-    "перейдём к делу",
-    "перейдем к делу",
-    "давай к делу",
-    "давайте к делу",
-    "что мне делать",
-    "что делать чтобы",
-    "как мне улучшить",
-    "как улучшить себя",
-    "дай совет",
-    "дайте совет",
-    "хочу совет",
-    "нужен совет",
-    "сколько можно спрашивать",
-)
-_HARD_QUESTION_STOP_KEYWORDS = (
-    "перестань спрашивать",
-    "перестаньте спрашивать",
-    "не хочу отвечать на вопрос",
-    "задолбали вопрос",
-    "надоело отвечать",
-    "надоело, что спрашива",
-    "устал отвечать",
-    "устала отвечать",
-)
 
 
 @dataclass(frozen=True)
@@ -92,64 +31,51 @@ class TurnDirectives:
     primary_emotion: str = ""
     emotional_intensity: float = 0.0
     suggested_focus_field: str | None = None
+    advice_request: bool = False
+    crisis_signal: bool = False
+    confidence: float = 0.0
+    rationale_short: str = ""
 
 
 class IntakeResponsePolicy:
-    """Computes intake turn directives from emotion, dialogue, and card state."""
+    """Computes intake turn directives from structured LLM signal analysis."""
 
     @staticmethod
-    def _detect_pushback(message: str) -> PushbackType:
-        text = message.lower()
-        if any(kw in text for kw in _STAGE_PUSHBACK_KEYWORDS):
-            return "stage"
-        if any(kw in text for kw in _HARD_QUESTION_STOP_KEYWORDS):
-            return "hard_stop"
-        return "none"
-
-    @staticmethod
-    def _message_signals_crisis(message: str) -> bool:
-        text = message.lower()
-        return any(kw in text for kw in _CRISIS_KEYWORDS)
-
-    @staticmethod
-    def _emotion_signals_crisis(
-        primary_emotion: str,
-        emotional_intensity: float,
-        crisis_intensity_threshold: float,
-    ) -> bool:
-        emotion = (primary_emotion or "").lower().strip()
-        return (
-            emotion in _NEGATIVE_EMOTIONS
-            and emotional_intensity >= crisis_intensity_threshold
-        )
-
-    @staticmethod
-    def _is_emotionally_weighted_turn(
-        primary_emotion: str,
-        emotional_intensity: float,
-    ) -> bool:
-        emotion = (primary_emotion or "").lower().strip()
-        if emotion in _NEGATIVE_EMOTIONS and emotional_intensity >= 0.5:
-            return True
-        return emotional_intensity >= 0.65
-
-    @staticmethod
-    def _resolve_style_from_emotion(
-        primary_emotion: str,
-        emotional_intensity: float,
+    def _resolve_style(
+        signal: DialogueSignalResult,
         therapist_styles: list[str] | None,
-        keyword_style: str,
     ) -> str:
         styles = therapist_styles or []
         if not styles:
-            return keyword_style or "friendly"
+            return signal.active_style or "friendly"
+        return signal.active_style if signal.active_style in styles else styles[0]
 
-        emotion = (primary_emotion or "").lower().strip()
-        if emotion in _NEGATIVE_EMOTIONS and emotional_intensity >= 0.5:
-            if "soft" in styles:
-                return "soft"
+    @staticmethod
+    def _resolve_guidance(
+        signal: DialogueSignalResult,
+        has_gaps: bool,
+    ) -> QuestionGuidance:
+        if signal.crisis_signal or signal.question_stop or signal.pushback_type != "none":
+            return "defer"
+        if signal.question_guidance in ("encourage", "optional", "defer"):
+            if signal.question_guidance == "optional" and has_gaps:
+                return "encourage"
+            return signal.question_guidance
+        return "encourage" if has_gaps else "optional"
 
-        return keyword_style if keyword_style in styles else styles[0]
+    @staticmethod
+    def _resolve_mode(
+        signal: DialogueSignalResult,
+        guidance: QuestionGuidance,
+        has_gaps: bool,
+    ) -> ResponseMode:
+        if guidance == "defer":
+            return "hold_space"
+        if signal.recommended_response_mode in ("hold_space", "gentle_explore", "structured_gather"):
+            if signal.recommended_response_mode == "hold_space" and has_gaps:
+                return "gentle_explore"
+            return signal.recommended_response_mode
+        return "structured_gather" if has_gaps else "gentle_explore"
 
     @staticmethod
     def _build_directive_text(
@@ -160,61 +86,46 @@ class IntakeResponsePolicy:
         min_sentences: int,
         max_question_words: int,
         suggested_focus_field: str | None,
-        emotionally_weighted: bool,
+        signal: DialogueSignalResult,
     ) -> str:
+        focus_hint = f" Card area to explore: {suggested_focus_field}." if suggested_focus_field else ""
         lines = [
             f"Response mode for this turn: {mode}.",
             f"Write at least {min_sentences} complete sentences in patient_response_ru.",
             f"question_guidance: {question_guidance}.",
+            f"Signal rationale: {signal.rationale_short or 'No short rationale provided.'}",
         ]
-        focus_hint = ""
-        if suggested_focus_field:
-            focus_hint = f" Card area to explore: {suggested_focus_field}."
-
-        if pushback_type == "stage":
+        if signal.crisis_signal:
             lines.append(
-                "PUSHBACK DETECTED — apply INTAKE_STAGE_PUSHBACK_HANDLING from system instructions. "
-                "Validate frustration or urgency; explain intake vs later therapy; no advice or "
-                "action plans now; orient to upcoming sessions working on their problems together. "
-                "End with a patient-led invitation in their own pace — no direct question mark "
-                "on this turn. Resume gentle gathering on later turns if they engage."
+                "Crisis-level signal detected by dialogue analysis: prioritize safety, grounded "
+                "empathic presence, and no information-gathering question this turn."
+            )
+        elif pushback_type == "stage":
+            lines.append(
+                "Stage pushback or premature advice request detected: apply the intake-stage "
+                "boundary from system instructions, validate urgency, explain why context matters, "
+                "and end with a patient-led invitation rather than a direct question."
                 + focus_hint
             )
         elif pushback_type == "hard_stop":
             lines.append(
-                "Patient asked to stop questions: prioritize empathic holding space only — "
-                "no direct question this turn. Brief validation; do not pressure them to answer."
+                "Patient requested no questions now: hold space, validate, and do not ask a direct "
+                "question this turn."
                 + focus_hint
             )
         elif question_guidance == "defer":
-            lines.append(
-                "This turn: prioritize holding space and empathic reflection only — "
-                "no direct question (crisis-level distress)."
-                + focus_hint
-            )
-        elif emotionally_weighted:
-            lines.append(
-                "The patient is in pain or strong emotion: lead with extended empathic "
-                "reflection and validation (most of your reply). "
-                f"Still end with ONE soft open-ended question (max {max_question_words} words) "
-                "when they can engage — intake requires understanding, not silence."
-                f"{focus_hint}"
-            )
+            lines.append("Do not ask a question this turn; use reflection and containment." + focus_hint)
         elif mode == "structured_gather":
             lines.append(
-                "Start with warm reflection on what they shared. "
-                f"Then include ONE soft open-ended question (max {max_question_words} words) "
-                "toward a missing card area — expected on intake."
-                f"{focus_hint} "
-                "Never open with name + single blunt question."
+                f"Start with warm reflection, then include one soft open-ended question "
+                f"(max {max_question_words} words) toward understanding or the intake card."
+                f"{focus_hint}"
             )
         else:
             lines.append(
-                "Start with reflection on what they shared. "
-                f"Then include ONE soft open-ended question (max {max_question_words} words) "
-                "that advances understanding or the intake card."
-                f"{focus_hint} "
-                "The question must follow from their words, not a generic intake script."
+                f"Use empathic reflection and, if natural, one open-ended question "
+                f"(max {max_question_words} words) that follows from the patient's words."
+                f"{focus_hint}"
             )
         return " ".join(lines)
 
@@ -222,72 +133,20 @@ class IntakeResponsePolicy:
     def compute_directives(
         cls,
         *,
-        patient_message: str,
+        signal: DialogueSignalResult,
         therapist_styles: list[str] | None,
-        current_user_turns: int,
-        primary_emotion: str,
-        emotional_intensity: float,
         missing_fields: list[str],
         min_sentences: int = 3,
         max_question_words: int = 25,
-        hold_emotion_intensity_threshold: float = 0.95,
-        max_user_turns: int | None = None,
     ) -> TurnDirectives:
-        keyword_style = IntakePrompts.resolve_active_style(
-            patient_message, therapist_styles, current_user_turns
-        )
-        active_style = cls._resolve_style_from_emotion(
-            primary_emotion,
-            emotional_intensity,
-            therapist_styles,
-            keyword_style,
-        )
-
         has_gaps = len(missing_fields) >= 1
         suggested_focus = missing_fields[0] if missing_fields else None
-        emotionally_weighted = cls._is_emotionally_weighted_turn(
-            primary_emotion, emotional_intensity
-        )
-        pushback_type = cls._detect_pushback(patient_message)
-
-        near_max = (
-            max_user_turns is not None
-            and current_user_turns >= max(0, max_user_turns - 2)
-        )
-
-        crisis = cls._message_signals_crisis(patient_message) or cls._emotion_signals_crisis(
-            primary_emotion,
-            emotional_intensity,
-            hold_emotion_intensity_threshold,
-        )
-
-        if crisis:
-            mode: ResponseMode = "hold_space"
-            guidance: QuestionGuidance = "defer"
-            pushback_type = "none"
-            min_s = max(min_sentences, 4)
-        elif pushback_type == "stage":
-            mode = "hold_space"
-            guidance = "defer"
-            min_s = max(min_sentences, 4)
-        elif pushback_type == "hard_stop":
-            mode = "hold_space"
-            guidance = "defer"
-            min_s = max(min_sentences, 3)
-        elif has_gaps:
-            mode = "structured_gather"
-            guidance = "encourage"
-            pushback_type = "none"
-            min_s = max(min_sentences, 4 if emotionally_weighted else 3)
-            if near_max:
-                min_s = max(min_sentences, 3)
-        else:
-            mode = "gentle_explore"
-            guidance = "encourage"
-            pushback_type = "none"
-            min_s = max(min_sentences, 4 if emotionally_weighted else 3)
-
+        guidance = cls._resolve_guidance(signal, has_gaps)
+        mode = cls._resolve_mode(signal, guidance, has_gaps)
+        active_style = cls._resolve_style(signal, therapist_styles)
+        min_s = max(min_sentences, 4 if signal.crisis_signal or guidance == "defer" else 3)
         allow_question = guidance != "defer"
+        pushback_type = signal.pushback_type
 
         directive_en = cls._build_directive_text(
             mode,
@@ -296,7 +155,7 @@ class IntakeResponsePolicy:
             min_sentences=min_s,
             max_question_words=max_question_words,
             suggested_focus_field=suggested_focus,
-            emotionally_weighted=emotionally_weighted and allow_question,
+            signal=signal,
         )
 
         return TurnDirectives(
@@ -308,7 +167,11 @@ class IntakeResponsePolicy:
             question_guidance=guidance,
             pushback_type=pushback_type,
             directive_en=directive_en,
-            primary_emotion=primary_emotion,
-            emotional_intensity=emotional_intensity,
+            primary_emotion=signal.primary_emotion,
+            emotional_intensity=signal.emotional_intensity,
             suggested_focus_field=suggested_focus,
+            advice_request=signal.advice_request,
+            crisis_signal=signal.crisis_signal,
+            confidence=signal.confidence,
+            rationale_short=signal.rationale_short,
         )
