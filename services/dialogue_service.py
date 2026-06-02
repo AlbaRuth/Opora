@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from datetime import UTC, datetime
+
 from agents.core import IntakeAgent, TherapistAgent
 from core.config import get_settings
 from core.intake_user_copy import (
@@ -14,11 +17,13 @@ from core.profile_labels import address_mode_label, sex_label, style_labels
 from db.repositories import (
     AccountRepository,
     ClinicalProfileRepository,
+    ConversationTraceRepository,
     IntakeStateRepository,
     MessageRepository,
     SessionRepository,
 )
 from db.session import get_db_session
+from observability.tracing import TraceContext, get_current_trace, trace_scope
 from services.prescreening_gate import evaluate_prescreening_gate
 from services.session_lifecycle import create_or_replace_active_session
 from services.session_state_builder import build_session_state
@@ -46,6 +51,59 @@ class DialogueService:
         first_name: str | None = None,
         last_name: str | None = None,
         language_code: str | None = None,
+        channel: str = "telegram",
+        source: str = "bot",
+    ) -> str | None:
+        """Start new session with an end-to-end observability trace."""
+        if get_current_trace():
+            return await self._start_session_core(
+                telegram_id=telegram_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                language_code=language_code,
+            )
+
+        trace = TraceContext(channel=channel, source=source)
+        started = time.perf_counter()
+        status = "success"
+        error_message: str | None = None
+        with trace_scope(trace):
+            try:
+                return await self._start_session_core(
+                    telegram_id=telegram_id,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                    language_code=language_code,
+                )
+            except Exception as exc:
+                status = "error"
+                error_message = str(exc)
+                raise
+            finally:
+                finished_at = datetime.now(UTC)
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                try:
+                    async with get_db_session() as session:
+                        trace_repo = ConversationTraceRepository(session)
+                        await trace_repo.create_from_context(
+                            trace=trace,
+                            status=status,
+                            finished_at=finished_at,
+                            duration_ms=duration_ms,
+                            error_message=error_message,
+                        )
+                except Exception as trace_error:
+                    logger.warning("conversation_trace_persist_failed", error=str(trace_error))
+
+    async def _start_session_core(
+        self,
+        telegram_id: int,
+        username: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        language_code: str | None = None,
     ) -> str | None:
         """Start new session and return greeting or intake opener."""
         async with get_db_session() as session:
@@ -60,6 +118,9 @@ class DialogueService:
                     last_name=last_name,
                     language_code=language_code,
                 )
+                current_trace = get_current_trace()
+                if current_trace:
+                    current_trace.account_id = account.id
                 logger.info("new_account_created", account_id=account.id, telegram_id=telegram_id)
                 return None
 
@@ -68,11 +129,16 @@ class DialogueService:
                 return None
 
             context = await load_user_context(gate.account_id, session)
+            current_trace = get_current_trace()
+            if current_trace:
+                current_trace.account_id = context.account_id
             created = await create_or_replace_active_session(
                 account_id=context.account_id,
                 intake_enabled=self.settings.intake_enabled,
                 session=session,
             )
+            if current_trace:
+                current_trace.session_id = created.session_id
 
             state = build_session_state(
                 context=context,
@@ -133,6 +199,54 @@ class DialogueService:
         self,
         telegram_id: int,
         text: str,
+        channel: str = "telegram",
+        source: str = "bot",
+    ) -> dict:
+        """Process user message with an end-to-end observability trace."""
+        if get_current_trace():
+            return await self._process_message_core(telegram_id=telegram_id, text=text)
+
+        trace = TraceContext(channel=channel, source=source)
+        started = time.perf_counter()
+        status = "success"
+        error_message: str | None = None
+        with trace_scope(trace):
+            try:
+                result = await self._process_message_core(telegram_id=telegram_id, text=text)
+                if isinstance(result, dict):
+                    result.setdefault(
+                        "trace",
+                        {
+                            "trace_id": str(trace.trace_id),
+                            "turn_id": str(trace.turn_id),
+                            "channel": trace.channel,
+                        },
+                    )
+                return result
+            except Exception as exc:
+                status = "error"
+                error_message = str(exc)
+                raise
+            finally:
+                finished_at = datetime.now(UTC)
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                try:
+                    async with get_db_session() as session:
+                        trace_repo = ConversationTraceRepository(session)
+                        await trace_repo.create_from_context(
+                            trace=trace,
+                            status=status,
+                            finished_at=finished_at,
+                            duration_ms=duration_ms,
+                            error_message=error_message,
+                        )
+                except Exception as trace_error:
+                    logger.warning("conversation_trace_persist_failed", error=str(trace_error))
+
+    async def _process_message_core(
+        self,
+        telegram_id: int,
+        text: str,
     ) -> dict:
         """Process user message and return response."""
         async with get_db_session() as session:
@@ -149,6 +263,9 @@ class DialogueService:
                 }
 
             account_id = gate.account_id
+            current_trace = get_current_trace()
+            if current_trace:
+                current_trace.account_id = account_id
             # Get active session
             session_repo = SessionRepository(session)
             message_repo = MessageRepository(session)
@@ -160,6 +277,8 @@ class DialogueService:
                     "response": "No active session. Please start with /start.",
                     "session_ended": False,
                 }
+            if current_trace:
+                current_trace.session_id = active_session.id
 
             # Per-session transaction lock to avoid concurrent state races.
             await session_repo.acquire_session_lock(active_session.id)
