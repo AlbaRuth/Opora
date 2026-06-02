@@ -14,6 +14,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def get_project_root() -> Path:
+    """Return repository root used for config and relative paths."""
+
+    return _PROJECT_ROOT
+
+
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
@@ -46,52 +52,9 @@ class Settings(BaseSettings):
         alias="TELEGRAM_DROP_PENDING_ON_START"
     )
     
-    # OpenRouter
+    # OpenRouter secret. Public provider/model defaults live in config/llm_models.json.
     openrouter_api_key: str = Field(alias="OPENROUTER_API_KEY")
-    openrouter_base_url: str = Field(
-        default="https://openrouter.ai/api/v1",
-        alias="OPENROUTER_BASE_URL"
-    )
-    openrouter_http_referer: str = Field(
-        default="http://localhost",
-        alias="OPENROUTER_HTTP_REFERER"
-    )
-    openrouter_app_title: str = Field(
-        default="Opora",
-        alias="OPENROUTER_APP_TITLE"
-    )
-    
-    # LLM Global Settings
-    llm_timeout_seconds: int = Field(default=120, alias="LLM_TIMEOUT_SECONDS")
-    llm_max_retries: int = Field(default=2, alias="LLM_MAX_RETRIES")
-    
-    # Therapist Agent LLM Settings
-    llm_therapist_model: str = Field(
-        default="Pro/deepseek-ai/DeepSeek-V3",
-        alias="LLM_THERAPIST_MODEL"
-    )
-    llm_therapist_temperature: float = Field(
-        default=0.7,
-        alias="LLM_THERAPIST_TEMPERATURE"
-    )
-    llm_therapist_max_tokens: int = Field(
-        default=150,
-        alias="LLM_THERAPIST_MAX_TOKENS"
-    )
-    
-    # Evaluator Agent LLM Settings
-    llm_evaluator_model: str = Field(
-        default="Pro/deepseek-ai/DeepSeek-V3",
-        alias="LLM_EVALUATOR_MODEL"
-    )
-    llm_evaluator_temperature: float = Field(
-        default=0.3,
-        alias="LLM_EVALUATOR_TEMPERATURE"
-    )
-    llm_evaluator_max_tokens: int = Field(
-        default=200,
-        alias="LLM_EVALUATOR_MAX_TOKENS"
-    )
+    llm_config_path: str = Field(default="config/llm_models.json", alias="LLM_CONFIG_PATH")
 
     # Intake Stage Settings
     intake_enabled: bool = Field(default=True, alias="INTAKE_ENABLED")
@@ -123,33 +86,16 @@ class Settings(BaseSettings):
         default=2,
         alias="INTAKE_MAX_USER_TURNS_MULTIPLIER",
     )
-    llm_intake_model: str = Field(
-        default="Pro/deepseek-ai/DeepSeek-V3",
-        alias="LLM_INTAKE_MODEL",
+
+    # Monitoring web service
+    monitoring_enabled: bool = Field(default=False, alias="MONITORING_ENABLED")
+    monitoring_api_token: str = Field(default="dev-monitor-token", alias="MONITORING_API_TOKEN")
+    monitoring_cors_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        alias="MONITORING_CORS_ORIGINS",
     )
-    # UPDATED: Higher default temperature for more natural, varied responses
-    llm_intake_temperature: float = Field(
-        default=0.55,
-        alias="LLM_INTAKE_TEMPERATURE",
-    )
-    llm_intake_max_tokens: int = Field(
-        default=750,
-        alias="LLM_INTAKE_MAX_TOKENS",
-    )
-    # NEW: Additional sampling parameters for intake
-    llm_intake_top_p: float = Field(
-        default=0.95,
-        alias="LLM_INTAKE_TOP_P",
-    )
-    llm_intake_frequency_penalty: float = Field(
-        default=0.38,
-        alias="LLM_INTAKE_FREQUENCY_PENALTY",
-    )
-    llm_intake_presence_penalty: float = Field(
-        default=0.10,
-        alias="LLM_INTAKE_PRESENCE_PENALTY",
-    )
-    
+    observability_retention_days: int = Field(default=90, alias="OBSERVABILITY_RETENTION_DAYS")
+
     @property
     def is_development(self) -> bool:
         return self.app_env == "development"
@@ -171,6 +117,15 @@ class Settings(BaseSettings):
     def intake_max_user_turns(self) -> int:
         """Hard cap on patient-side turns during intake: min × multiplier (.env)."""
         return self.intake_min_user_turns * self.intake_max_user_turns_multiplier
+
+    @property
+    def monitoring_cors_origins_list(self) -> list[str]:
+        """Parse comma-separated CORS origins for monitor UI."""
+        return [
+            origin.strip()
+            for origin in self.monitoring_cors_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache()

@@ -9,10 +9,10 @@ from typing import Any, Dict
 
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
-from integrations.openrouter import OpenRouterClient
 from agents.prompts.evaluator_prompts import EvaluatorPrompts
 from db.session import get_db_session
 from db.repositories import SessionRepository, MessageRepository, DecisionLogRepository
+from services.llm import LlmGateway
 
 logger = get_logger(LogContexts.AGENT)
 
@@ -25,7 +25,7 @@ class TherapistEvaluator:
     
     def __init__(self):
         self.settings = get_settings()
-        self.llm_client = OpenRouterClient()
+        self.llm_gateway = LlmGateway()
     
     def _parse_response(self, response: Any) -> Any:
         """Parse LLM response - handles both string and object responses."""
@@ -40,44 +40,46 @@ class TherapistEvaluator:
         self,
         prompt: str,
         task_name: str,
-        max_tokens: int = 200,
-        temperature: float = 0.7,
-    ) -> str:
+    ) -> dict[str, Any]:
         """Call LLM with logging."""
-        result = await self.llm_client.simple_completion(
-            prompt=prompt,
-            system_message=EvaluatorPrompts.EVALUATOR_SYSTEM,
-            model=self.settings.llm_evaluator_model,
-            temperature=temperature,
-            max_tokens=max_tokens,
+        return await self.llm_gateway.complete(
+            agent_type="evaluator",
             task_name=task_name,
+            messages=[
+                {"role": "system", "content": EvaluatorPrompts.EVALUATOR_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            prompt=prompt,
+            prompt_template=f"EvaluatorPrompts.{task_name}",
+            prompt_variables={"rendered_prompt": prompt},
+            log=False,
         )
-        return result
     
     async def _log_agent_call(
         self,
         user_id: int,
         task_name: str,
         prompt: str,
-        response: str,
+        result: dict[str, Any],
         session_id: int | None = None,
     ) -> None:
         """Log agent call to database."""
         try:
-            async with get_db_session() as db_session:
-                from db.repositories import AgentLogRepository
-                repo = AgentLogRepository(db_session)
-                await repo.log_llm_call(
-                    account_id=user_id,
-                    agent_type="evaluator",
-                    task_name=task_name,
-                    model=self.settings.llm_evaluator_model,
-                    temperature=self.settings.llm_evaluator_temperature,
-                    max_tokens=self.settings.llm_evaluator_max_tokens,
-                    prompt=prompt[:5000] if prompt else None,  # Truncate if too long
-                    response=response[:5000] if response else None,
-                    session_id=session_id,
-                )
+            await self.llm_gateway.log_result(
+                account_id=user_id,
+                session_id=session_id,
+                agent_type="evaluator",
+                task_name=task_name,
+                messages=[
+                    {"role": "system", "content": EvaluatorPrompts.EVALUATOR_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                prompt=prompt,
+                prompt_template=f"EvaluatorPrompts.{task_name}",
+                prompt_variables={"rendered_prompt": prompt},
+                metadata={},
+                result=result,
+            )
         except Exception as e:
             logger.warning("failed_to_log_agent_call", error=str(e))
     
@@ -93,18 +95,17 @@ class TherapistEvaluator:
         """
         prompt = EvaluatorPrompts.CLIENT_REACTION.format(patient_input=patient_input)
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="evaluate_client_reaction",
-            max_tokens=5,
-            temperature=0.0,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="evaluate_client_reaction",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -124,18 +125,17 @@ class TherapistEvaluator:
         """
         prompt = EvaluatorPrompts.EMOTION_ASSESSMENT.format(patient_input=patient_input)
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="assess_emotion",
-            max_tokens=50,
-            temperature=0.3,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="assess_emotion",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -179,18 +179,17 @@ class TherapistEvaluator:
             session_strategy_memory=session_strategy_memory,
         )
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="update_response_strategy",
-            max_tokens=100,
-            temperature=0.5,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="update_response_strategy",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -247,18 +246,17 @@ class TherapistEvaluator:
             patient_input=patient_input,
         )
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="should_use_memory",
-            max_tokens=110,
-            temperature=0.3,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="should_use_memory",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -277,18 +275,17 @@ class TherapistEvaluator:
         """
         prompt = EvaluatorPrompts.SESSION_END.format(patient_input=patient_input)
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="should_end_session",
-            max_tokens=5,
-            temperature=0.0,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="should_end_session",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -313,18 +310,17 @@ class TherapistEvaluator:
             last_dialogs=last_dialogs_str,
         )
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="evaluate_therapy_progress",
-            max_tokens=150,
-            temperature=0.3,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="evaluate_therapy_progress",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -361,18 +357,17 @@ class TherapistEvaluator:
             all_dialogs=all_dialogs,
         )
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="determine_treatment_stage",
-            max_tokens=120,
-            temperature=0.3,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="determine_treatment_stage",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         
@@ -393,18 +388,17 @@ class TherapistEvaluator:
         
         prompt = EvaluatorPrompts.INITIAL_THERAPY.format(medical_record=medical_record)
         
-        response = await self._call_llm(
+        response_result = await self._call_llm(
             prompt=prompt,
             task_name="select_initial_therapy",
-            max_tokens=40,
-            temperature=0.3,
         )
+        response = response_result.get("content", "")
         
         await self._log_agent_call(
             user_id=user_id,
             task_name="select_initial_therapy",
             prompt=prompt,
-            response=response,
+            result=response_result,
             session_id=session_id,
         )
         

@@ -1,0 +1,107 @@
+{
+  "provider": {
+    "base_url": "https://openrouter.ai/api/v1",
+    "http_referer": "http://localhost",
+    "app_title": "Opora",
+    "timeout_seconds": 120,
+    "max_retries": 2,
+    "retry_backoff_seconds": 1.0,
+    "retryable_status_codes": [429, 500, 502, 503, 504]
+  },
+  "defaults": {
+    "model": "google/gemma-4-26b-a4b-it:nitro",
+    "temperature": 0.7,
+    "max_tokens": 250,
+    "top_p": 0.95,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "stop": null,
+    "seed": null,
+    "reasoning": null
+  },
+  "agents": {
+    "therapist": {
+      "generate_response": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.7,
+        "max_tokens": 250,
+        "top_p": 0.95,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
+      }
+    },
+    "intake": {
+      "intake_turn": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.55,
+        "max_tokens": 750,
+        "top_p": 0.95,
+        "frequency_penalty": 0.38,
+        "presence_penalty": 0.1
+      }
+    },
+    "evaluator": {
+      "evaluate_client_reaction": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.0,
+        "max_tokens": 5
+      },
+      "assess_emotion": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.3,
+        "max_tokens": 50
+      },
+      "update_response_strategy": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.5,
+        "max_tokens": 100
+      },
+      "should_use_memory": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.3,
+        "max_tokens": 110
+      },
+      "should_end_session": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.0,
+        "max_tokens": 5
+      },
+      "evaluate_therapy_progress": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.3,
+        "max_tokens": 150
+      },
+      "determine_treatment_stage": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.3,
+        "max_tokens": 120
+      },
+      "select_initial_therapy": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.3,
+        "max_tokens": 40
+      }
+    },
+    "sandbox_patient": {
+      "auto_patient": {
+        "model": "google/gemma-4-26b-a4b-it:nitro",
+        "temperature": 0.85,
+        "max_tokens": 220,
+        "top_p": 0.95,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.1
+      }
+    }
+  },
+  "logging": {
+    "prompt_max_chars": 5000,
+    "response_max_chars": 5000,
+    "store_full_prompt": false,
+    "store_prompt_variables": true
+  },
+  "sandbox": {
+    "auto_patient_context_messages": 12,
+    "default_auto_run_turns": 3,
+    "max_auto_run_turns": 20
+  }
+}

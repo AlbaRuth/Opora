@@ -11,13 +11,13 @@ from typing import Any
 
 from core.config import get_settings
 from core.logging import LogContexts, get_logger
-from db.repositories import AgentLogRepository, ClinicalProfileRepository, MessageRepository
+from db.repositories import ClinicalProfileRepository, MessageRepository
 from db.session import get_db_session
-from integrations.openrouter import OpenRouterClient
 
 from agents.evaluators.therapist_evaluator import TherapistEvaluator
 from agents.intake.response_policy import IntakeResponsePolicy
 from agents.prompts.intake_prompts import IntakePrompts
+from services.llm import LlmGateway
 
 from .session_state import SessionState
 
@@ -29,7 +29,7 @@ class IntakeAgent:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.llm_client = OpenRouterClient()
+        self.llm_gateway = LlmGateway()
         self.evaluator = TherapistEvaluator()
 
     def _compute_max_user_turns(self) -> int | None:
@@ -163,18 +163,38 @@ class IntakeAgent:
                 "suggested_focus_field": turn_directives.suggested_focus_field,
             }
 
-            result = await self.llm_client.chat_completion(
-                model=self.settings.llm_intake_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=self.settings.llm_intake_temperature,
-                max_tokens=self.settings.llm_intake_max_tokens,
+            prompt_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            prompt_variables = {
+                "patient_message": patient_text,
+                "current_card": current_card,
+                "current_user_turns": state.intake_user_turns,
+                "recent_dialogue": recent_dialogue,
+                "therapist_styles": state.therapist_styles,
+                "therapist_name": state.therapist_name,
+                "max_user_turns": max_user_turns,
+                "turn_directives": turn_directives.__dict__,
+                "missing_fields": missing_before,
+                "required_fields": self.settings.intake_required_fields_list,
+            }
+
+            result = await self.llm_gateway.complete(
+                agent_type="intake",
                 task_name="intake_turn",
-                top_p=self.settings.llm_intake_top_p,
-                frequency_penalty=self.settings.llm_intake_frequency_penalty,
-                presence_penalty=self.settings.llm_intake_presence_penalty,
+                messages=prompt_messages,
+                prompt=user_prompt,
+                prompt_template="IntakePrompts.get_intake_turn_user_prompt",
+                prompt_variables=prompt_variables,
+                metadata={
+                    "flow_phase": "intake",
+                    "intake_user_turns_before": state.intake_user_turns,
+                    "missing_fields": missing_before,
+                    "patient_sex": state.patient_sex,
+                    "address_mode": state.address_mode,
+                },
+                log=False,
             )
 
             parsed = self._parse_json_content(result["content"]) if result["success"] else {}
@@ -213,15 +233,21 @@ class IntakeAgent:
                 initial_info_insufficient=initial_info_insufficient,
             )
 
-            await self._log_call(
+            await self.llm_gateway.log_result(
                 account_id=account_id,
                 session_id=state.session_db_id,
+                agent_type="intake",
+                task_name="intake_turn",
+                messages=prompt_messages,
                 prompt=user_prompt,
+                prompt_template="IntakePrompts.get_intake_turn_user_prompt",
+                prompt_variables=prompt_variables,
                 result=result,
                 metadata={
                     "flow_phase": "intake",
                     "intake_user_turns_before": state.intake_user_turns,
                     "intake_user_turns_after": user_turns_after_processing,
+                    "missing_fields": missing_before,
                     "missing_required_fields": missing_required,
                     "is_intake_complete": is_complete,
                     "initial_info_insufficient": initial_info_insufficient,
@@ -298,30 +324,3 @@ class IntakeAgent:
             return value.strip()
         return str(value).strip()
 
-    async def _log_call(
-        self,
-        account_id: int,
-        session_id: int | None,
-        prompt: str,
-        result: dict[str, Any],
-        metadata: dict[str, Any],
-    ) -> None:
-        async with get_db_session() as session:
-            agent_log_repo = AgentLogRepository(session)
-            await agent_log_repo.log_llm_call(
-                account_id=account_id,
-                session_id=session_id,
-                agent_type="intake",
-                task_name="intake_turn",
-                model=self.settings.llm_intake_model,
-                temperature=self.settings.llm_intake_temperature,
-                max_tokens=self.settings.llm_intake_max_tokens,
-                prompt=prompt[:5000],
-                response=result.get("content", "")[:5000],
-                latency_ms=result.get("latency_ms"),
-                tokens_input=result.get("usage", {}).get("prompt_tokens", 0),
-                tokens_output=result.get("usage", {}).get("completion_tokens", 0),
-                success=result.get("success", False),
-                error_message=result.get("error"),
-                metadata=metadata,
-            )

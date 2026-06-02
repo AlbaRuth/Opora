@@ -7,7 +7,6 @@ from typing import Any, Dict
 
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
-from integrations.openrouter import OpenRouterClient
 from agents.prompts.therapist_prompts import TherapistPrompts
 from agents.evaluators.therapist_evaluator import TherapistEvaluator
 from db.session import get_db_session
@@ -17,8 +16,8 @@ from db.repositories import (
     SessionRepository,
     MessageRepository,
     DecisionLogRepository,
-    AgentLogRepository,
 )
+from services.llm import LlmGateway
 from .session_state import SessionState
 
 logger = get_logger(LogContexts.AGENT)
@@ -32,7 +31,7 @@ class TherapistAgent:
     
     def __init__(self):
         self.settings = get_settings()
-        self.llm_client = OpenRouterClient()
+        self.llm_gateway = LlmGateway()
         self.evaluator = TherapistEvaluator()
 
     async def _build_sessions_data(
@@ -346,6 +345,24 @@ class TherapistAgent:
             address_mode=state.address_mode,  # NEW
         )
 
+        prompt_variables = {
+            "patient_input": patient_input,
+            "memory_result": memory_result,
+            "primary_emotion": primary_emotion,
+            "emotional_intensity": emotional_intensity,
+            "current_therapy": current_therapy,
+            "current_stage": current_stage,
+            "current_strategy": current_strategy,
+            "current_strategy_text": current_strategy_text,
+            "session_memory": session_memory,
+            "therapist_name": state.therapist_name,
+            "patient_display_name": state.patient_display_name,
+            "patient_age": state.patient_age,
+            "patient_sex": state.patient_sex,
+            "therapist_styles": state.therapist_styles,
+            "address_mode": state.address_mode,
+        }
+
         prompt = TherapistPrompts.get_response_prompt(
             patient_input=patient_input,
             memory_result=memory_result,
@@ -364,35 +381,20 @@ class TherapistAgent:
             address_mode=state.address_mode,  # NEW
         )
 
-        result = await self.llm_client.chat_completion(
-            model=self.settings.llm_therapist_model,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=self.settings.llm_therapist_temperature,
-            max_tokens=self.settings.llm_therapist_max_tokens,
+        prompt_messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt},
+        ]
+        result = await self.llm_gateway.complete(
+            agent_type="therapist",
             task_name="generate_response",
+            messages=prompt_messages,
+            account_id=user_id,
+            session_id=state.session_db_id,
+            prompt=prompt,
+            prompt_template="TherapistPrompts.get_response_prompt",
+            prompt_variables=prompt_variables,
         )
-
-        async with get_db_session() as session:
-            agent_log_repo = AgentLogRepository(session)
-            await agent_log_repo.log_llm_call(
-                account_id=user_id,
-                agent_type="therapist",
-                task_name="generate_response",
-                model=self.settings.llm_therapist_model,
-                temperature=self.settings.llm_therapist_temperature,
-                max_tokens=self.settings.llm_therapist_max_tokens,
-                prompt=prompt[:5000],
-                response=result["content"][:5000] if result["content"] else None,
-                latency_ms=result["latency_ms"],
-                tokens_input=result["usage"]["prompt_tokens"],
-                tokens_output=result["usage"]["completion_tokens"],
-                success=result["success"],
-                error_message=result["error"],
-                session_id=state.session_db_id,
-            )
 
         if result["success"]:
             raw_response = result["content"]

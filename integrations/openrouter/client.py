@@ -3,6 +3,7 @@ OpenRouter LLM client for Opora.
 Centralized async client with retry logic and usage tracking.
 """
 
+import asyncio
 import time
 from typing import Any
 
@@ -10,13 +11,10 @@ from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from core.config import get_settings
+from core.llm_config import LlmGenerationConfig, get_llm_config
 from core.logging import get_logger, LogContexts
 
 logger = get_logger(LogContexts.LLM)
-
-
-# Retryable HTTP status codes
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class OpenRouterClient:
@@ -24,13 +22,15 @@ class OpenRouterClient:
     
     def __init__(self):
         self.settings = get_settings()
+        self.llm_config = get_llm_config()
+        provider = self.llm_config.provider
         self.client = AsyncOpenAI(
-            base_url=self.settings.openrouter_base_url,
+            base_url=provider.base_url,
             api_key=self.settings.openrouter_api_key,
-            timeout=self.settings.llm_timeout_seconds,
+            timeout=provider.timeout_seconds,
             default_headers={
-                "HTTP-Referer": self.settings.openrouter_http_referer,
-                "X-Title": self.settings.openrouter_app_title,
+                "HTTP-Referer": provider.http_referer,
+                "X-Title": provider.app_title,
             },
         )
     
@@ -51,6 +51,10 @@ class OpenRouterClient:
         top_p: float | None = None,
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
+        stop: list[str] | str | None = None,
+        seed: int | None = None,
+        reasoning: dict[str, Any] | None = None,
+        generation_config: LlmGenerationConfig | None = None,
     ) -> dict[str, Any]:
         """
         Execute chat completion with retries.
@@ -62,8 +66,21 @@ class OpenRouterClient:
         - success: bool
         - error: str | None
         """
+        if generation_config is not None:
+            model = generation_config.model
+            temperature = generation_config.temperature
+            max_tokens = generation_config.max_tokens
+            top_p = generation_config.top_p
+            frequency_penalty = generation_config.frequency_penalty
+            presence_penalty = generation_config.presence_penalty
+            stop = generation_config.stop
+            seed = generation_config.seed
+            reasoning = generation_config.reasoning
+
         model = self._normalize_model_id(model)
-        max_retries = self.settings.llm_max_retries
+        provider = self.llm_config.provider
+        max_retries = provider.max_retries
+        retryable_status_codes = set(provider.retryable_status_codes)
 
         # Build kwargs dynamically to only send supported parameters
         kwargs: dict[str, Any] = {
@@ -78,6 +95,25 @@ class OpenRouterClient:
             kwargs["frequency_penalty"] = frequency_penalty
         if presence_penalty is not None:
             kwargs["presence_penalty"] = presence_penalty
+        if stop is not None:
+            kwargs["stop"] = stop
+        if seed is not None:
+            kwargs["seed"] = seed
+        if reasoning is not None:
+            kwargs["reasoning"] = reasoning
+
+        generation_params = {
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "stop": stop,
+            "seed": seed,
+            "reasoning": reasoning,
+            "config_source": generation_config.config_source if generation_config else "legacy_call",
+        }
 
         start_time = time.time()
         last_error = None
@@ -88,11 +124,22 @@ class OpenRouterClient:
                 
                 latency_ms = int((time.time() - start_time) * 1000)
                 
-                content = completion.choices[0].message.content or ""
+                message = completion.choices[0].message
+                content = message.content or ""
+                reasoning = getattr(message, "reasoning", None)
                 usage = {
                     "prompt_tokens": completion.usage.prompt_tokens if completion.usage else 0,
                     "completion_tokens": completion.usage.completion_tokens if completion.usage else 0,
                     "total_tokens": completion.usage.total_tokens if completion.usage else 0,
+                }
+                cost_usd = getattr(completion.usage, "cost", None) if completion.usage else None
+                provider_metadata = {
+                    "id": completion.id,
+                    "created": completion.created,
+                    "model": completion.model,
+                    "finish_reason": completion.choices[0].finish_reason,
+                    "usage": usage,
+                    "cost_usd": cost_usd,
                 }
                 
                 logger.info(
@@ -108,6 +155,10 @@ class OpenRouterClient:
                     "content": content.strip(),
                     "usage": usage,
                     "latency_ms": latency_ms,
+                    "reasoning": reasoning,
+                    "provider_metadata": provider_metadata,
+                    "generation_params": generation_params,
+                    "cost_usd": cost_usd,
                     "success": True,
                     "error": None,
                 }
@@ -118,7 +169,7 @@ class OpenRouterClient:
                 
                 # Check if error is retryable
                 is_retryable = False
-                if hasattr(e, "status_code") and e.status_code in _RETRYABLE_STATUS_CODES:
+                if hasattr(e, "status_code") and e.status_code in retryable_status_codes:
                     is_retryable = True
                 
                 if attempt < max_retries and is_retryable:
@@ -130,7 +181,7 @@ class OpenRouterClient:
                         max_retries=max_retries,
                         error=last_error,
                     )
-                    time.sleep(1 * (attempt + 1))  # Exponential backoff
+                    await asyncio.sleep(provider.retry_backoff_seconds * (attempt + 1))
                     continue
                 
                 logger.error(
@@ -146,6 +197,10 @@ class OpenRouterClient:
                     "content": "",
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                     "latency_ms": latency_ms,
+                    "reasoning": None,
+                    "provider_metadata": None,
+                    "generation_params": generation_params,
+                    "cost_usd": None,
                     "success": False,
                     "error": last_error,
                 }
@@ -155,6 +210,10 @@ class OpenRouterClient:
             "content": "",
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             "latency_ms": int((time.time() - start_time) * 1000),
+            "reasoning": None,
+            "provider_metadata": None,
+            "generation_params": generation_params,
+            "cost_usd": None,
             "success": False,
             "error": last_error or "Unknown error",
         }
