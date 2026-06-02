@@ -34,6 +34,16 @@ class ConversationTrace(Base, TimestampMixin):
     )
     channel: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    sandbox_run_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("observability.sandbox_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    sandbox_batch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("observability.sandbox_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="success", index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -50,9 +50,24 @@ class AgentLog(Base, TimestampMixin):
     trace_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
     turn_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
     channel: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    sandbox_run_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("observability.sandbox_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    sandbox_batch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("observability.sandbox_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     prompt_messages: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
+    prompt_messages_full: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
     response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_full: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prompt_truncated: Mapped[bool] = mapped_column(default=False)
+    response_truncated: Mapped[bool] = mapped_column(default=False)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reasoning_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

@@ -44,6 +44,13 @@ class AgentLogRepository(BaseRepository[AgentLog]):
         trace_id: str | None = None,
         turn_id: str | None = None,
         channel: str | None = None,
+        source: str | None = None,
+        sandbox_run_id: int | None = None,
+        sandbox_batch_id: int | None = None,
+        prompt_messages_full: list[dict[str, Any]] | None = None,
+        response_full: str | None = None,
+        prompt_truncated: bool = False,
+        response_truncated: bool = False,
     ) -> AgentLog:
         """Log LLM agent execution."""
         current_trace = get_current_trace()
@@ -57,7 +64,10 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             trace_id = trace_id or str(current_trace.trace_id)
             turn_id = turn_id or str(current_trace.turn_id)
             channel = channel or current_trace.channel
+            source = source or current_trace.source
             session_id = session_id or current_trace.session_id
+            sandbox_run_id = sandbox_run_id or current_trace.sandbox_run_id
+            sandbox_batch_id = sandbox_batch_id or current_trace.sandbox_batch_id
 
         return await self.create(
             account_id=account_id,
@@ -65,6 +75,9 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             trace_id=trace_id,
             turn_id=turn_id,
             channel=channel,
+            source=source,
+            sandbox_run_id=sandbox_run_id,
+            sandbox_batch_id=sandbox_batch_id,
             agent_type=agent_type,
             task_name=task_name,
             model=model,
@@ -72,7 +85,11 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             max_tokens=max_tokens,
             prompt=prompt,
             prompt_messages=prompt_messages,
+            prompt_messages_full=prompt_messages_full,
             response=response,
+            response_full=response_full,
+            prompt_truncated=prompt_truncated,
+            response_truncated=response_truncated,
             reasoning=reasoning,
             reasoning_summary=reasoning_summary,
             latency_ms=latency_ms,

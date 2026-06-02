@@ -31,6 +31,7 @@ from .decision_log import DecisionLog
 from .agent_log import AgentLog
 from .conversation_trace import ConversationTrace
 from .patient_template import PatientTemplateModel
+from .sandbox_batch import SandboxBatch
 from .sandbox_run import SandboxRun
 from .sandbox_turn import SandboxTurn
 
@@ -55,6 +56,7 @@ __all__ = [
     "AgentLog",
     "ConversationTrace",
     "PatientTemplateModel",
+    "SandboxBatch",
     "SandboxRun",
     "SandboxTurn",
 ]

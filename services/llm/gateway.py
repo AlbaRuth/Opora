@@ -15,7 +15,7 @@ from core.llm_config import (
 from db.repositories import AgentLogRepository
 from db.session import get_db_session
 from integrations.openrouter import OpenRouterClient
-from observability.tracing import serialize_prompt_messages
+from observability.tracing import get_current_trace, serialize_prompt_messages
 
 LogWriter = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -101,6 +101,11 @@ class LlmGateway:
             )
         logging_config = self.llm_config.logging
         response_text = result.get("content", "") or ""
+        current_trace = get_current_trace()
+        store_full = logging_config.store_full_prompt or (current_trace and current_trace.channel == "sandbox")
+        serialized_messages = serialize_prompt_messages(messages)
+        prompt_truncated = bool(prompt and len(prompt) > logging_config.prompt_max_chars)
+        response_truncated = bool(response_text and len(response_text) > logging_config.response_max_chars)
         payload = {
             "account_id": account_id,
             "session_id": session_id,
@@ -110,12 +115,16 @@ class LlmGateway:
             "temperature": generation_config.temperature,
             "max_tokens": generation_config.max_tokens,
             "prompt": prompt[: logging_config.prompt_max_chars] if prompt else None,
-            "prompt_messages": serialize_prompt_messages(messages),
+            "prompt_messages": serialized_messages,
+            "prompt_messages_full": serialized_messages if store_full else None,
             "response": (
                 response_text[: logging_config.response_max_chars]
                 if response_text
                 else None
             ),
+            "response_full": response_text if store_full and response_text else None,
+            "prompt_truncated": prompt_truncated,
+            "response_truncated": response_truncated,
             "reasoning": result.get("reasoning"),
             "latency_ms": result.get("latency_ms"),
             "tokens_input": result.get("usage", {}).get("prompt_tokens", 0),
@@ -131,8 +140,8 @@ class LlmGateway:
                 "config_source": generation_config.config_source,
                 "prompt_template": prompt_template,
                 "prompt_variables": prompt_variables,
-                "prompt_truncated": len(prompt) > logging_config.prompt_max_chars,
-                "response_truncated": len(response_text) > logging_config.response_max_chars,
+                "prompt_truncated": prompt_truncated,
+                "response_truncated": response_truncated,
             },
             "cost_usd": result.get("cost_usd"),
             "provider_metadata": result.get("provider_metadata"),

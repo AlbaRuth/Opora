@@ -26,6 +26,8 @@ class TraceContext:
     turn_id: UUID = field(default_factory=uuid4)
     account_id: int | None = None
     session_id: int | None = None
+    sandbox_run_id: int | None = None
+    sandbox_batch_id: int | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     total_tokens_input: int = 0
     total_tokens_output: int = 0

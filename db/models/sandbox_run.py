@@ -33,6 +33,11 @@ class SandboxRun(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    batch_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("observability.sandbox_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Sandbox run")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="active", index=True)
     model_config: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
