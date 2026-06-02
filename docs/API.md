@@ -1,3 +1,44 @@
+# Monitor/Sandbox API
+
+Monitor API запускается отдельно от Telegram bot и защищается заголовком `X-API-Key`.
+
+Base URL для локальной разработки: `http://127.0.0.1:8000`.
+
+## Health
+
+- `GET /health`
+
+## Chats
+
+- `GET /api/chats?source=telegram|sandbox`
+- `GET /api/chats/{session_id}`
+- `GET /api/chats/{session_id}/messages`
+- `GET /api/chats/{session_id}/traces`
+
+`source` берётся из `identity.accounts.origin`, а не из диапазона `telegram_id`.
+
+## Traces
+
+- `GET /api/traces/{trace_id}`
+
+Ответ включает:
+
+- `trace`: aggregate status, latency, tokens, cost.
+- `llm_calls`: prompt messages, generation params, prompt variables, response, reasoning, provider metadata.
+
+## Sandbox
+
+- `POST /api/sandbox/sessions`
+- `GET /api/sandbox/sessions/{run_id}`
+- `POST /api/sandbox/sessions/{run_id}/messages`
+- `POST /api/sandbox/sessions/{run_id}/auto-run`
+- `POST /api/sandbox/sessions/{run_id}/stop`
+- `GET /api/sandbox/sessions/{run_id}/turns`
+- `GET /api/sandbox/templates/patients`
+- `GET /api/sandbox/model-config`
+
+Sandbox requests may include `model_overrides`. Overrides are scoped to run/turn and do not mutate `config/llm_models.json`.
+
 # API Documentation
 
 ## Repository API

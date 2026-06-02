@@ -1,0 +1,117 @@
+# Sandbox Runbook
+
+## Назначение
+
+Sandbox позволяет тестировать Opora без Telegram: UI создает synthetic account/session с `origin=sandbox`, отправляет сообщения через реальный `DialogueService`, а Monitor показывает traces каждого LLM-вызова.
+
+## Предварительные условия
+
+- PostgreSQL доступен по `DATABASE_URL`.
+- `.env` содержит `TELEGRAM_BOT_TOKEN`, `OPENROUTER_API_KEY`, `MONITORING_API_TOKEN`.
+- `LLM_CONFIG_PATH=config/llm_models.json`.
+- Миграции Alembic применены до `head`.
+- Node.js установлен для `monitoring/web`.
+
+## Локальный запуск
+
+```powershell
+# Python зависимости
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Миграции
+.\.venv\Scripts\python.exe scripts\migrate.py upgrade
+
+# Backend
+$env:MONITORING_ENABLED="true"
+$env:MONITORING_API_TOKEN="dev-monitor-token"
+$env:LLM_CONFIG_PATH="config/llm_models.json"
+.\.venv\Scripts\python.exe -m uvicorn monitoring.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Во втором терминале:
+
+```powershell
+cd monitoring\web
+npm install
+$env:VITE_MONITOR_API_BASE="http://127.0.0.1:8000"
+$env:VITE_MONITOR_API_TOKEN="dev-monitor-token"
+npm run dev
+```
+
+Откройте `http://localhost:5173`.
+
+## Проверка API
+
+```powershell
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/health
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/api/sandbox/model-config
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/api/sandbox/templates/patients
+```
+
+## UI workflow
+
+1. В панели `Sandbox` выберите шаблон пациента.
+2. В `Model Settings` выберите agent task.
+3. При необходимости измените `model`, `temperature`, `max_tokens`, `top_p`, penalties.
+4. Нажмите `Создать sandbox-сессию`.
+5. Отправьте сообщение пациента вручную или нажмите `Auto patient x3`.
+6. При необходимости нажмите `Stop`, чтобы закрыть run без влияния на Telegram bot.
+7. Для ответа нажмите `Открыть trace`.
+8. В trace detail проверьте:
+   - `Generation Params`;
+   - `Variables`;
+   - `Prompt`;
+   - `Response`;
+   - `Provider Metadata`.
+
+## Где смотреть данные
+
+- Диалог: `therapy.therapy_sessions`, `therapy.messages`.
+- End-to-end traces: `observability.conversation_traces`.
+- LLM calls: `observability.agent_logs`.
+- Sandbox runs: `observability.sandbox_runs`.
+- Sandbox turns: `observability.sandbox_turns`.
+- Шаблоны пациента: `observability.patient_templates`.
+- Source filter: `identity.accounts.origin`.
+
+## Настройка моделей
+
+Публичные defaults лежат в `config/llm_models.json`. Там задаются:
+
+- provider endpoint и retry policy;
+- defaults;
+- настройки `therapist`, `intake`, `evaluator`, `sandbox_patient`;
+- logging limits;
+- sandbox limits.
+
+Для временного теста меняйте параметры через UI `Model Settings`. Эти overrides применяются только к sandbox run/turn и не меняют committed JSON.
+
+## Изоляция от Telegram
+
+- Telegram bot запускается отдельно через `bot_runner.py`.
+- Monitor/Sandbox backend запускается отдельно через `uvicorn monitoring.api.main:app`.
+- React UI запускается отдельно через Vite или static hosting.
+- Sandbox auto-run не должен создавать фоновые задачи внутри Telegram polling loop.
+- Monitor source filter использует persisted `origin`, поэтому synthetic id range не участвует в UX/API классификации.
+
+## Типовые ошибки
+
+### 401 от Monitor API
+
+Проверьте, что `MONITORING_API_TOKEN` и `VITE_MONITOR_API_TOKEN` совпадают.
+
+### Ошибка OpenRouter auth
+
+Проверьте `OPENROUTER_API_KEY` в `.env`. Ключ не хранится в `config/llm_models.json`.
+
+### Модель не найдена
+
+Проверьте slug в `config/llm_models.json` или UI override. Дефолт: `google/gemma-4-26b-a4b-it:nitro`.
+
+### Нет traces
+
+Проверьте, что миграции применены, а sandbox сообщение прошло через `DialogueService.process_message(..., channel="sandbox")`.
+
+### Auto-patient не отвечает
+
+Проверьте `sandbox_patient.auto_patient` в `config/llm_models.json`, `OPENROUTER_API_KEY`, timeout provider и логи `sandbox_auto_patient`.

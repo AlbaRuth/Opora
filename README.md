@@ -1,205 +1,123 @@
-# Opora — агент психологического консультирования v2.0
+# Opora
 
-Рефакторинг архитектуры с нормализованной схемой БД, персонализацией через address_mode (ты/вы) и сохранением исходной логики агента.
+Opora — Telegram-бот психологического консультирования с отдельным Monitor/Sandbox сервисом для разработки, наблюдаемости и тестирования LLM-ответов без Telegram.
 
-## Новое в v2.0
+## Что Внутри
 
-### Персонализация общения
-- **Пол пациента** — выбор между мужским/женским/не хочу указывать
-- **Стиль обращения** — формальный (вы) или неформальный (ты)
-- Агенты адаптируют грамматику и тон в зависимости от выбора
+- `bot_runner.py` запускает только Telegram polling.
+- `monitoring/api` запускает отдельный FastAPI backend для Monitor/Sandbox.
+- `monitoring/web` содержит React UI: chat browser, dialog view, trace explorer, sandbox console и model overrides.
+- `services/llm` содержит единый `LlmGateway`: resolve config, OpenRouter call, `observability.agent_logs`.
+- `observability` содержит нейтральный trace context, не зависящий от web/monitoring слоя.
+- `config/llm_models.json` хранит публичные LLM defaults и гиперпараметры; `.env` хранит секреты.
 
-### Нормализованная архитектура БД
-- Разделение на 5 схем: identity, profile, clinical, therapy, observability
-- Разделение перегруженной таблицы `users` на логические сущности
-- Новая таблица `intake_states` отдельно от сессий
-- Полная переработка репозиториев под новую схему
+## Структура
 
-## Архитектура
-
-```
-Opora/
-├── core/              # Конфигурация и логирование
-├── db/                # Модели БД, репозитории, миграции
-│   ├── models/        # SQLAlchemy модели по схемам
-│   │   ├── account.py           # identity.accounts
-│   │   ├── user_profile.py      # profile.user_profiles (NEW fields)
-│   │   ├── therapist_pref.py    # profile.therapist_preferences
-│   │   ├── clinical_profile.py  # clinical.clinical_profiles
-│   │   ├── therapy_session.py   # therapy.therapy_sessions
-│   │   ├── intake_state.py      # therapy.intake_states (NEW)
-│   │   ├── message.py           # therapy.messages
-│   │   ├── decision_log.py      # therapy.decision_logs
-│   │   └── agent_log.py         # observability.agent_logs
-│   └── repositories/  # Репозитории для каждой сущности
-├── agents/            # Логика агента
-│   ├── core/          # TherapistAgent, IntakeAgent, SessionState
-│   ├── evaluators/    # TherapistEvaluator
-│   └── prompts/       # Шаблоны промптов (NEW: address_mode)
-├── integrations/      # Внешние интеграции
-│   ├── telegram/      # Бот и prescreening flow (NEW steps)
-│   └── openrouter/    # LLM-клиент
-├── services/          # Слой бизнес-логики (DialogueService)
-├── docs/              # Документация (NEW)
-│   ├── ARCHITECTURE.md
-│   ├── DATABASE.md
-│   └── API.md
-└── tests/             # Набор тестов
+```text
+agents/                 LLM agents, evaluators, prompts
+core/                   settings, channel constants, LLM config loader
+db/                     SQLAlchemy models and repositories
+observability/          trace context shared by bot and sandbox
+services/               dialogue orchestration, LLM gateway, channel logic
+integrations/telegram/  Telegram adapter and prescreening flow
+integrations/openrouter OpenRouter client
+monitoring/api/         FastAPI Monitor/Sandbox API
+monitoring/sandbox/     Sandbox domain, runner, auto-patient
+monitoring/web/         React Monitor UI
+alembic/versions/       PostgreSQL migrations
+docs/                   detailed architecture, DB, API and runbooks
 ```
 
-## Ключевые принципы
+## Быстрый Старт На Windows
 
-1. **Логика агента сохранена**: вся логика принятия решений из оригинального `Opora/agent/` сохранена
-2. **Новая архитектура БД**: 5 схем вместо монолитной таблицы users
-3. **Персонализация**: пол пациента и стиль обращения (ты/вы) во всех промптах
-4. **Слоистая архитектура**: четкое разделение между агентами, сервисами и интеграциями
-5. **Конфигурация через окружение**: все настройки задаются через `.env`
+Все Python-команды запускайте из `.venv`, если она есть:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+copy .env.example .env
+```
+
+В `.env` задайте минимум:
+
+```env
+DATABASE_URL=postgresql+asyncpg://opora:opora@localhost:5432/opora
+TELEGRAM_BOT_TOKEN=...
+OPENROUTER_API_KEY=...
+LLM_CONFIG_PATH=config/llm_models.json
+MONITORING_API_TOKEN=dev-monitor-token
+OBSERVABILITY_RETENTION_DAYS=90
+```
+
+Примените миграции:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+```
+
+## Запуск Telegram Бота
+
+Telegram path запускается отдельным процессом и не зависит от sandbox UI:
+
+```powershell
+.\.venv\Scripts\python.exe bot_runner.py
+```
+
+## Запуск Monitor API
+
+Во втором терминале:
+
+```powershell
+$env:MONITORING_ENABLED="true"
+$env:MONITORING_API_TOKEN="dev-monitor-token"
+$env:LLM_CONFIG_PATH="config/llm_models.json"
+.\.venv\Scripts\python.exe -m uvicorn monitoring.api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Проверка:
+
+```powershell
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/health
+```
+
+## Запуск React UI
+
+В третьем терминале:
+
+```powershell
+cd monitoring\web
+npm install
+$env:VITE_MONITOR_API_BASE="http://127.0.0.1:8000"
+$env:VITE_MONITOR_API_TOKEN="dev-monitor-token"
+npm run dev
+```
+
+Откройте `http://localhost:5173`.
+
+## Разделение Нагрузки
+
+- Telegram bot, Monitor API и React UI запускаются разными процессами.
+- Sandbox auto-run не добавляет задачи в Telegram polling loop.
+- Sandbox accounts маркируются `identity.accounts.origin = 'sandbox'`; Telegram accounts — `origin = 'telegram'`.
+- Monitor UI фильтрует source по persisted origin, а не по synthetic Telegram ID.
+- LLM overrides из sandbox применяются через scoped config и не меняют Telegram defaults.
+
+## Тесты И Проверки
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -c "from monitoring.api.main import app; print(app.title)"
+cd monitoring\web
+npm run build
+```
+
+Если PostgreSQL недоступен, DB tests могут быть skipped через fixtures.
 
 ## Документация
 
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — архитектура системы и потоки данных
-- **[docs/DATABASE.md](docs/DATABASE.md)** — схема БД, таблицы, связи
-- **[docs/API.md](docs/API.md)** — API репозиториев и агентов
-
-## Быстрый старт
-
-### 🐳 С Docker Compose (рекомендуется)
-
-```bash
-# 1. Установить зависимости
-pip install -r requirements.txt
-
-# 2. Настроить окружение
-cp .env.example .env
-# Отредактируйте .env (минимум: TELEGRAM_BOT_TOKEN, OPENROUTER_API_KEY)
-
-# 3. Запустить PostgreSQL
-docker-compose up -d
-
-# 4. Применить миграции базы данных (Alembic)
-alembic upgrade head
-
-# 5. Запустить бота
-python bot_runner.py
-```
-
-### 🐘 С локальной PostgreSQL
-
-```bash
-# 1. Установить зависимости
-pip install -r requirements.txt
-
-# 2. Настроить окружение
-cp .env.example .env
-# Отредактируйте .env (DATABASE_URL, TELEGRAM_BOT_TOKEN, OPENROUTER_API_KEY)
-
-# 3. Создать базу данных в PostgreSQL (через psql/pgAdmin)
-# CREATE DATABASE opora;
-
-# 4. Применить миграции базы данных
-alembic upgrade head
-
-# 5. Запустить бота
-python bot_runner.py
-```
-
-### 🛑 Остановка
-
-```bash
-# Остановить PostgreSQL
-docker-compose down
-
-# Остановить и удалить данные (осторожно!)
-docker-compose down -v
-```
-
-## Миграции базы данных (Alembic)
-
-Проект использует **Alembic** для версионирования схемы базы данных.
-
-### Основные команды
-
-```bash
-# Показать текущую версию миграции
-alembic current
-
-# Показать историю миграций
-alembic history
-
-# Применить все миграции (для новых баз)
-alembic upgrade head
-
-# Откатить на одну версию назад (осторожно!)
-alembic downgrade -1
-
-# Создать новую миграцию после изменения моделей
-alembic revision --autogenerate -m "описание изменений"
-```
-
-### Workflow для разработчиков
-
-1. **Изменяете модели** в `db/models/`
-2. **Создаете миграцию**: `alembic revision --autogenerate -m "добавлено поле X"`
-3. **Проверяете SQL** в созданном файле `alembic/versions/`
-4. **Применяете**: `alembic upgrade head`
-5. **Тестируете** и отправляете PR с моделями + миграцией
-
-## Тесты (pytest)
-
-- Отдельная база PostgreSQL для тестов (пример имени: `opora_test`). URL по умолчанию задаётся в [`tests/conftest.py`](tests/conftest.py); при необходимости переопределите переменную окружения `DATABASE_URL` перед запуском.
-- При старте pytest миграции Alembic до `head` выполняются синхронно в хуке `pytest_configure` (так избегается конфликт `asyncio.run` внутри уже работающего цикла событий).
-- Запуск из виртуального окружения:
-
-```bash
-.\.venv\Scripts\python.exe -m pytest
-```
-
-- Тесты, которым нужна БД, будут помечены как **skipped**, если PostgreSQL недоступен или миграция не применилась.
-- Нагрузочный сценарий в [`tests/integration/test_concurrent_session_handling.py`](tests/integration/test_concurrent_session_handling.py) по умолчанию отключён; чтобы включить: `set OPORA_RUN_INTEGRATION=1` (Windows) или `export OPORA_RUN_INTEGRATION=1` (Unix).
-
-## Схема базы данных v2.0
-
-### Схемы PostgreSQL
-
-| Схема | Назначение | Таблицы |
-|-------|-----------|---------|
-| **identity** | Идентификация | `accounts` |
-| **profile** | Предпочтения | `user_profiles`, `therapist_preferences` |
-| **clinical** | Медицинские данные | `clinical_profiles` |
-| **therapy** | Сессии и диалоги | `therapy_sessions`, `intake_states`, `messages`, `decision_logs` |
-| **observability** | Логи и метрики | `agent_logs` |
-
-### Новые поля в профиле
-
-**profile.user_profiles**:
-- `sex` — пол пациента (male/female/prefer_not_to_say)
-- `address_mode` — стиль обращения (formal/informal)
-
-## Сохранение исходной логики
-
-Следующие файлы содержат сохраненную логику агента с расширениями:
-
-- `agents/core/therapist_agent.py` — основная оркестрация (с NEW: address_mode)
-- `agents/core/intake_agent.py` — сбор карточки (с NEW: address_mode в промптах)
-- `agents/core/session_state.py` — DTO состояния (с NEW: patient_sex, address_mode)
-- `agents/evaluators/therapist_evaluator.py` — логика оценки
-- `agents/prompts/therapist_prompts.py` — промпты с поддержкой formal/informal
-- `agents/prompts/intake_prompts.py` — промпты intake с address_mode
-- `agents/prompts/evaluator_prompts.py` — промпты оценщика
-
-## Логирование
-
-Три потока логов:
-1. **Service Logs** — инфраструктура, ошибки, события выполнения
-2. **Agent Logs** — вызовы LLM, решения, рассуждения
-3. **Audit Logs** — логи доступа с редактированием PII
-
-## Переменные окружения
-
-Поддерживаются все переменные из `.env`:
-
-- `DATABASE_URL` — подключение к PostgreSQL
-- `TELEGRAM_BOT_TOKEN` — токен бота
-- `OPENROUTER_*` — настройки LLM-провайдера
-- `LOG_*` — конфигурация логирования (structlog + `agent_logs` в БД)
-- `INTAKE_*` — настройки intake-фазы
+- `ARCHITECTURE.md` — единый источник правды по архитектуре.
+- `docs/DATABASE.md` — актуальная схема БД, связи, индексы, retention.
+- `docs/API.md` — API contracts.
+- `docs/SANDBOX_RUNBOOK.md` — workflow sandbox и диагностика.
+- `DEPLOYMENT.md` — rollout/rollback и процессная модель.
+- `docs/MONITORING_SANDBOX_TZ.md` — исходное ТЗ Monitor/Sandbox.

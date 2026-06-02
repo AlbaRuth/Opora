@@ -15,6 +15,16 @@ Opora использует **Alembic** для управления схемой 
 - Воспроизводимые миграции
 - Безопасный rollback при проблемах
 
+Runtime разделён на независимые процессы:
+
+| Процесс | Команда | Назначение |
+|---------|---------|------------|
+| Telegram bot | `.\.venv\Scripts\python.exe bot_runner.py` | Production Telegram polling |
+| Monitor API | `.\.venv\Scripts\python.exe -m uvicorn monitoring.api.main:app --host 127.0.0.1 --port 8000` | Chat/trace/sandbox API |
+| Monitor Web | `npm run dev` или static build | React UI для monitor/sandbox |
+
+Telegram bot не должен импортировать web UI и не должен выполнять sandbox auto-run задачи в своём event loop. Sandbox использует отдельный process и отдельные request/concurrency limits.
+
 ## Миграции базы данных
 
 ### Структура миграций
@@ -78,6 +88,57 @@ python scripts/migrate.py upgrade
 # 5. Запустить бота
 python bot_runner.py
 ```
+
+### Opora Monitor and Sandbox
+
+Monitor запускается отдельным процессом после применения миграций. Он использует ту же `DATABASE_URL`, секрет `OPENROUTER_API_KEY` из `.env` и публичный LLM-конфиг `config/llm_models.json`.
+
+```bash
+# 1. Установить Python-зависимости
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 2. Применить миграции, включая observability trace/sandbox таблицы
+.\.venv\Scripts\python.exe scripts\migrate.py upgrade
+
+# 3. Запустить FastAPI monitor backend
+set MONITORING_ENABLED=true
+set MONITORING_API_TOKEN=dev-monitor-token
+set LLM_CONFIG_PATH=config/llm_models.json
+.\.venv\Scripts\python.exe -m uvicorn monitoring.api.main:app --host 127.0.0.1 --port 8000 --reload
+
+# 4. Запустить React UI
+cd monitoring\web
+npm install
+set VITE_MONITOR_API_BASE=http://127.0.0.1:8000
+set VITE_MONITOR_API_TOKEN=dev-monitor-token
+npm run dev
+```
+
+Проверки:
+
+```bash
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/health
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/api/chats
+curl -H "X-API-Key: dev-monitor-token" http://127.0.0.1:8000/api/sandbox/model-config
+```
+
+Изоляция нагрузки:
+
+- Telegram process оставлять запущенным отдельно от `uvicorn`.
+- Sandbox source определяется через `identity.accounts.origin`, а не через диапазон synthetic id.
+- Для production/staging запускать Monitor API за reverse proxy auth; `MONITORING_API_TOKEN` не считать полноценной публичной авторизацией.
+- Для долгих auto-run задавать отдельные process/container limits, чтобы Telegram polling не конкурировал за event loop.
+
+Sandbox workflow:
+
+1. Откройте React UI на `http://localhost:5173`.
+2. В блоке `Model Settings` проверьте effective config из `config/llm_models.json`.
+3. При необходимости измените model/temperature/max tokens/top-p/penalties для выбранной agent task.
+4. Нажмите `Создать sandbox-сессию`.
+5. Отправьте ручное сообщение пациента или запустите `Auto patient x3`.
+6. Откройте trace из sandbox turn и проверьте `Generation Params`, `Variables`, `Prompt`, `Response`, `Provider Metadata`.
+
+Для production/staging замените `MONITORING_API_TOKEN`, ограничьте CORS через `MONITORING_CORS_ORIGINS` и не открывайте monitor API публично без дополнительного reverse-proxy auth. `MONITORING_ENABLED` является policy flag; сам запуск контролируется процессом `uvicorn`.
 
 ### Staging
 

@@ -217,23 +217,9 @@ TELEGRAM_DROP_PENDING_ON_START=true
 
 # OpenRouter
 OPENROUTER_API_KEY=...
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_HTTP_REFERER=...
-OPENROUTER_APP_TITLE=Opora
 
-# Настройки LLM
-LLM_TIMEOUT_SECONDS=120
-LLM_MAX_RETRIES=2
-
-# Настройки LLM для терапевта
-LLM_THERAPIST_MODEL=Pro/deepseek-ai/DeepSeek-V3
-LLM_THERAPIST_TEMPERATURE=0.7
-LLM_THERAPIST_MAX_TOKENS=150
-
-# Настройки LLM для оценщика
-LLM_EVALUATOR_MODEL=Pro/deepseek-ai/DeepSeek-V3
-LLM_EVALUATOR_TEMPERATURE=0.3
-LLM_EVALUATOR_MAX_TOKENS=200
+# Публичные LLM defaults
+LLM_CONFIG_PATH=config/llm_models.json
 
 ```
 

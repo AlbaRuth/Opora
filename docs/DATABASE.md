@@ -1,218 +1,169 @@
-# Схема базы данных Opora v2.0
+# Database Schema
 
-## Обзор
+Opora использует PostgreSQL и Alembic. Схема разделена по контекстам, чтобы Telegram, Sandbox и Monitor могли работать независимо, но иметь общую observability-картину.
 
-База данных PostgreSQL с нормализованной структурой, разделенной на логические схемы:
+## Schemas
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      identity                               │
-│                    accounts (PK id)                         │
-│              (telegram_id, username, ...)                   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              │               │               │
-              ▼               ▼               ▼
-    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-    │   profile    │  │   profile    │  │  clinical    │
-    │user_profiles │  │  therapist_  │  │  clinical_   │
-    │(account_id  │  │ preferences  │  │ profiles     │
-    │    PK/FK)    │  │(account_id  │  │(account_id   │
-    │              │  │    PK/FK)    │  │    PK/FK)    │
-    │  NEW fields: │  │              │  │              │
-    │  - sex       │  │  - therapist │  │  - medical   │
-    │  - address_  │  │    _name     │  │    history   │
-    │    mode      │  │  - therapist │  │  - problems  │
-    │              │  │    _gender   │  │  - intake_   │
-    │              │  │  - traits    │  │    hypotesis │
-    └──────────────┘  └──────────────┘  └──────────────┘
-              │               │               │
-              └───────────────┼───────────────┘
-                              │
-                              ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                        therapy                          │
-    │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
-    │  │   therapy_   │  │   intake_    │  │   messages   │   │
-    │  │  sessions    │  │   states     │  │              │   │
-    │  │(account_id   │  │(session_id   │  │(session_id   │   │
-    │  │    FK)       │  │    PK/FK)    │  │    FK)       │   │
-    │  │              │  │              │  │              │   │
-    │  │  - session_  │  │  NEW table:  │  │  - role      │   │
-    │  │    number    │  │  - flow_     │  │  - content   │   │
-    │  │  - therapy_  │  │    phase     │  │  - emotion   │   │
-    │  │    type      │  │  - user_turn │  │    analysis  │   │
-    │  │  - dialog_   │  │    _count     │   │              │   │
-    │  │    count     │  │              │  │              │   │
-    │  │              │  │              │  │              │   │
-    │  └──────────────┘  └──────────────┘  └──────────────┘   │
-    │  ┌──────────────┐                                      │
-    │  │  decision_   │                                      │
-    │  │    logs      │                                      │
-    │  │(session_id   │                                      │
-    │  │    FK)       │                                      │
-    │  │              │                                      │
-    │  │  - emotion   │                                      │
-    │  │  - strategy  │                                      │
-    │  │  - decision  │                                      │
-    │  │    snapshot  │                                      │
-    │  └──────────────┘                                      │
-    └─────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-    ┌─────────────────────────────────────────────────────────┐
-    │                     observability                       │
-    │                    agent_logs                           │
-    │                   (account_id FK)                       │
-    │                                                         │
-    │  - LLM calls logging                                    │
-    │  - Performance metrics                                  │
-    │  - LLM call metadata (agent_logs)                       │
-    └─────────────────────────────────────────────────────────┘
-```
+- `identity`: root accounts and channel origin.
+- `profile`: user profile and therapist preferences.
+- `clinical`: clinical card.
+- `therapy`: sessions, messages, intake state, decisions.
+- `observability`: LLM calls, end-to-end traces, sandbox runs/turns/templates.
 
-## Схемы и таблицы
+## identity.accounts
 
-### 1. identity.accounts
+Ключевые поля:
 
-Корневая сущность пользователя.
+- `id`: internal account id.
+- `telegram_id`: external Telegram id or synthetic sandbox id.
+- `origin`: `telegram` или `sandbox`; Monitor source filter должен использовать это поле.
+- `username`, `first_name`, `last_name`, `language_code`.
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| id | BigInteger PK | Внутренний ID |
-| telegram_id | BigInteger Unique | ID Telegram |
-| username | String(255) | @username |
-| first_name | String(255) | Имя |
-| last_name | String(255) | Фамилия |
-| language_code | String(10) | Код языка |
-| created_at | DateTime | Создание |
-| updated_at | DateTime | Обновление |
+Индексы:
 
-### 2. profile.user_profiles
+- `telegram_id`
+- `origin`
 
-Профиль пациента с NEW полями.
+## therapy
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| account_id | BigInteger PK/FK | Ссылка на accounts |
-| display_name | String(255) | Отображаемое имя |
-| age | Integer | Возраст |
-| **sex** | String(20) | **NEW**: male/female/prefer_not_to_say |
-| **address_mode** | String(20) | **NEW**: formal/informal |
-| patient_pseudonym | String(255) | Legacy поле |
-| patient_age_legacy | String(50) | Legacy поле |
-| profile_completed_at | DateTime | Завершение профиля |
+### therapy.therapy_sessions
 
-### 3. profile.therapist_preferences
+Сессия консультации. Важные поля: `account_id`, `session_number`, `therapy_type`, `dialog_count`, `is_active`, `current_stage`, timestamps.
 
-Настройки психолога.
+Индексы/constraints:
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| account_id | BigInteger PK/FK | Ссылка на accounts |
-| therapist_name | String(255) | Имя психолога |
-| therapist_gender | String(20) | Пол психолога |
-| therapist_traits | JSON | Черты характера |
-| prescreening_completed_at | DateTime | Завершение прескрининга |
+- `ix_therapy_sessions_updated_at`
+- `UNIQUE(account_id, session_number)`
 
-### 4. clinical.clinical_profiles
+### therapy.messages
 
-Клиническая карточка.
+Сообщения пациента и модели.
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| account_id | BigInteger PK/FK | Ссылка на accounts |
-| mental_health_history | Text | История псих. здоровья |
-| physical_health_history | Text | История физ. здоровья |
-| current_problems | Text | Текущие проблемы |
-| intake_hypothesis | Text | Предварительная гипотеза |
-| intake_hypothesis_explanation | Text | Пояснение гипотезы |
+Ключевые поля:
 
-### 5. therapy.therapy_sessions
+- `session_id`, `role`, `content`, `message_number`
+- `trace_id`: связь с `observability.conversation_traces.trace_id`
+- `primary_emotion`, `emotional_intensity`
 
-Сессии терапии.
+Индексы:
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| id | BigInteger PK | ID сессии |
-| account_id | BigInteger FK | Ссылка на accounts |
-| session_number | Integer | Номер сессии |
-| therapy_type | String(255) | Тип терапии |
-| therapy_reason | Text | Причина терапии |
-| dialog_count | Integer | Счетчик диалогов |
-| is_active | Boolean | Активность |
-| ended_at | DateTime | Завершение |
-| current_stage | Text | Текущий этап |
+- `ix_messages_session_number(session_id, message_number)`
+- `ix_messages_trace_id`
 
-### 6. therapy.intake_states (NEW)
+### therapy.decision_logs
 
-Состояние intake workflow (вынесено из therapy_sessions).
+Снимок агентских решений по ходу ответа.
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| session_id | BigInteger PK/FK | Ссылка на therapy_sessions |
-| flow_phase | String(20) | Текущая фаза |
-| user_turn_count | Integer | Счетчик ходов |
-| completed_at | DateTime | Завершение intake |
+Ключевые поля:
 
-### 7. therapy.messages
+- `session_id`, `response_number`
+- `trace_id`
+- `memory_invoke_result`, `is_rejecting`, `current_therapy`, `current_stage`
+- `response_strategy`, `decision_snapshot`
 
-Сообщения сессии.
+Индексы:
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| id | BigInteger PK | ID сообщения |
-| session_id | BigInteger FK | Ссылка на сессию |
-| role | String(20) | patient/doctor |
-| content | Text | Текст сообщения |
-| message_number | BigInteger | Порядковый номер |
-| primary_emotion | String(50) | Эмоция (cached) |
-| emotional_intensity | Float | Интенсивность |
+- `ix_decision_logs_session_response(session_id, response_number)`
+- `ix_decision_logs_trace_id`
 
-### 8. therapy.decision_logs
+## observability
 
-Логи решений агента.
+### observability.conversation_traces
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| id | BigInteger PK | ID решения |
-| session_id | BigInteger FK | Ссылка на сессию |
-| response_number | Integer | Номер ответа |
-| primary_emotion | String(50) | Эмоция |
-| response_strategy | String(255) | Стратегия |
-| decision_snapshot | JSON | Полный снимок |
+Один user-visible turn. Связывает message, decisions, LLM calls и sandbox turn.
 
-### 9. observability.agent_logs
+Ключевые поля:
 
-Логи LLM вызовов.
+- `trace_id`, `parent_trace_id`, `turn_id`
+- `account_id`, `session_id`
+- `channel`, `source`, `status`
+- `started_at`, `finished_at`, `duration_ms`
+- `llm_latency_ms`, `total_tokens_input`, `total_tokens_output`, `total_cost_usd`
+- `error_message`
 
-| Поле | Тип | Описание |
-|------|-----|----------|
-| id | BigInteger PK | ID лога |
-| account_id | BigInteger FK | Ссылка на accounts |
-| session_id | BigInteger FK | Ссылка на сессию |
-| agent_type | String(50) | Тип агента |
-| task_name | String(100) | Задача |
-| prompt | Text | Промпт |
-| response | Text | Ответ |
-| latency_ms | Integer | Задержка |
-| tokens_input | Integer | Токены входа |
-| tokens_output | Integer | Токены выхода |
+Индексы:
 
-## Миграции
+- `trace_id`, `turn_id`, `account_id`, `session_id`
+- `ix_conversation_traces_session_started(session_id, started_at)`
+- `ix_conversation_traces_started_at`
+- `ix_conversation_traces_parent_trace_id`
 
-Все миграции управляются Alembic:
+### observability.agent_logs
 
-```bash
-# Создание миграции
-alembic revision --autogenerate -m "description"
+Каждый LLM call.
 
-# Применение миграций
-alembic upgrade head
+Ключевые поля:
 
-# Откат
-alembic downgrade -1
+- `trace_id`, `turn_id`, `channel`
+- `account_id`, `session_id`
+- `agent_type`, `task_name`, `model`, `temperature`, `max_tokens`
+- `prompt`, `prompt_messages`, `response`, `reasoning`, `reasoning_summary`
+- `latency_ms`, `tokens_input`, `tokens_output`, `cost_usd`
+- `metadata`, `provider_metadata`, `success`, `error_message`
+
+Индексы:
+
+- `ix_agent_logs_trace_created(trace_id, created_at)`
+- `trace_id`, `turn_id`, `channel`
+
+### observability.sandbox_runs
+
+Sandbox session metadata.
+
+Ключевые поля:
+
+- `account_id`, `session_id`, `patient_template_id`
+- `name`, `status`, `model_config`, `metadata`
+- `stopped_at`, `stop_reason`
+
+### observability.sandbox_turns
+
+Patient/assistant pair inside one sandbox run.
+
+Ключевые поля:
+
+- `run_id`, `turn_number`
+- `trace_id -> observability.conversation_traces.trace_id ON DELETE SET NULL`
+- `patient_message`, `assistant_message`, `latency_ms`, `metadata`
+
+Constraints:
+
+- `UNIQUE(run_id, turn_number)`
+
+### observability.patient_templates
+
+Reusable auto-patient persona.
+
+Constraints:
+
+- `UNIQUE(name, version)`
+
+## Trace Linkage
+
+Runtime flow:
+
+1. `DialogueService` создаёт `TraceContext`.
+2. `MessageRepository` и `DecisionLogRepository` берут active `trace_id`.
+3. `LlmGateway` пишет `agent_logs` и аккумулирует tokens/cost в trace context.
+4. `ConversationTraceRepository` сохраняет агрегаты после завершения хода.
+5. Sandbox turn сохраняет `trace_id`, чтобы UI мог открыть detail одним кликом.
+
+## Retention
+
+Retention управляется `OBSERVABILITY_RETENTION_DAYS` (default `90`). На текущем этапе purge/archive выполняется отдельной эксплуатационной задачей поверх:
+
+- `observability.agent_logs`
+- `observability.conversation_traces`
+- `observability.sandbox_turns`
+
+Prompt/response хранятся с truncation flags в `metadata`; лимиты задаются в `config/llm_models.json`.
+
+## Alembic
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic history
 ```
 
-Baseline миграция: `alembic/versions/001_new_schema_baseline.py`
+Исторические миграции не переписываются без отдельного решения о squash.

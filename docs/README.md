@@ -5,6 +5,8 @@
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — архитектура системы, слои, потоки данных
 - **[DATABASE.md](DATABASE.md)** — схема БД PostgreSQL с 5 схемами
 - **[API.md](API.md)** — API репозиториев и агентов
+- **[MONITORING_SANDBOX_TZ.md](MONITORING_SANDBOX_TZ.md)** — спецификация Monitor/Sandbox
+- **[SANDBOX_RUNBOOK.md](SANDBOX_RUNBOOK.md)** — запуск и диагностика sandbox
 
 ## Краткий обзор v2.0
 
@@ -64,3 +66,5 @@ python bot_runner.py
 - [ARCHITECTURE.md](ARCHITECTURE.md) — подробная архитектура
 - [DATABASE.md](DATABASE.md) — схема БД
 - [API.md](API.md) — API репозиториев
+- [MONITORING_SANDBOX_TZ.md](MONITORING_SANDBOX_TZ.md) — Monitor/Sandbox
+- [SANDBOX_RUNBOOK.md](SANDBOX_RUNBOOK.md) — runbook sandbox

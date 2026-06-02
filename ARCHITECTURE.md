@@ -4,6 +4,37 @@
 
 Opora — это система агента психологического консультирования со stateless-оркестрацией: runtime-состояние сессии не хранится в singleton-агенте и полностью опирается на PostgreSQL.
 
+## Opora Monitor and Sandbox
+
+Opora Monitor — отдельная web-подсистема для разработки и наблюдаемости. Она запускается отдельным FastAPI-процессом (`monitoring.api.main:app`) и использует React/Vite UI из `monitoring/web`.
+
+Ключевые свойства:
+
+- читает реальные Telegram-чаты из `therapy.therapy_sessions` и `therapy.messages`;
+- показывает LLM-вызовы из `observability.agent_logs`;
+- связывает один пользовательский ход с несколькими LLM-вызовами через `observability.conversation_traces`;
+- запускает sandbox-диалоги без Telegram через реальный `DialogueService`;
+- поддерживает LLM-автопациента через шаблоны `observability.patient_templates`.
+
+```mermaid
+flowchart TD
+    TelegramBot["Telegram Bot"] --> DialogueService["DialogueService"]
+    MonitorUI["React Monitor UI"] --> MonitorAPI["FastAPI Monitor API"]
+    SandboxUI["Sandbox UI"] --> MonitorAPI
+    MonitorAPI --> SandboxRunner["Sandbox Runner"]
+    SandboxRunner --> DialogueService
+    DialogueService --> Agents["Therapist, Intake, Evaluator"]
+    Agents --> OpenRouter["OpenRouter"]
+    DialogueService --> TherapyDB[("therapy schema")]
+    Agents --> AgentLogs[("observability.agent_logs")]
+    DialogueService --> Traces[("observability.conversation_traces")]
+    MonitorAPI --> TherapyDB
+    MonitorAPI --> AgentLogs
+    MonitorAPI --> Traces
+```
+
+Monitor не импортирует Telegram handlers и не должен вызывать Telegram API. Sandbox создает synthetic account/session, помечает профиль как завершенный и отправляет сообщения через `DialogueService.process_message(..., channel="sandbox")`, чтобы проверять ту же бизнес-логику, что и production-бот.
+
 ## Принципы проектирования
 
 1. **Сохранение логики агента**: ключевые алгоритмы терапевтических решений не изменены относительно оригинальной реализации Opora
@@ -240,31 +271,32 @@ services/
 
 ## Конфигурация
 
-Вся конфигурация вынесена в переменные окружения:
+Конфигурация разделена на секреты/окружение и публичные LLM-настройки.
+
+`.env` хранит только секреты, подключения и пути:
 
 ```python
 # core/config.py
 class Settings(BaseSettings):
-    # Настройки приложения
     app_env: str
     app_debug: bool
-
-    # База данных
     database_url: str
-
-    # Telegram
     telegram_bot_token: str
-
-    # OpenRouter (переиспользовано из SupportAssistant)
     openrouter_api_key: str
-    openrouter_base_url: str
-
-    # LLM-настройки по агентам
-    llm_therapist_model: str
-    llm_therapist_temperature: float
-    llm_evaluator_model: str
-    llm_evaluator_temperature: float
+    llm_config_path: str
 ```
+
+`config/llm_models.json` хранит публичные и некритичные LLM-настройки:
+
+- provider: OpenAI-compatible endpoint, headers, timeout, retry policy;
+- defaults: общие `model`, `temperature`, `max_tokens`, `top_p`, penalties;
+- agents: `therapist.generate_response`, `intake.intake_turn`, все evaluator-задачи, `sandbox_patient.auto_patient`;
+- logging: лимиты prompt/response, сохранение prompt variables;
+- sandbox: лимиты auto-run и размер контекста автопациента.
+
+`core.llm_config.LlmConfigResolver` собирает effective config как `defaults + task config + sandbox overrides`. Sandbox UI может переопределить параметры на run/turn, а `llm_overrides_scope()` делает эти overrides доступными всем вложенным агентам без изменения Telegram-пути.
+
+Все LLM-вызовы пишут в `observability.agent_logs` фактические `generation_params`, `config_source`, `prompt_variables`, `prompt_truncated`, `response_truncated`, provider metadata, latency и tokens.
 
 ## Стратегия логирования
 
@@ -354,6 +386,8 @@ services:
 ## Точки входа
 
 - `bot_runner.py` — основной Telegram-бот
+- `monitoring.api.main:app` — FastAPI backend Opora Monitor/Sandbox
+- `monitoring/web` — React/Vite UI Monitor/Sandbox
 - `scripts/init_db.py` — инициализация базы данных
 - `scripts/migrate_from_json.py` — миграция из JSON
 - `scripts/migrate_intake_stage.py` — additive-миграция intake-стадии
@@ -368,14 +402,14 @@ services:
 
 Процессная стадия хранится в `therapy_sessions.flow_phase` и не конфликтует с `therapy_sessions.current_stage` (который отражает этап терапии из evaluator).
 
-### Конфигурация intake через .env
+### Конфигурация intake
 
 - `INTAKE_ENABLED` — глобальный feature-flag стадии intake
 - `INTAKE_MIN_USER_TURNS` — минимальное число реплик пациента перед завершением intake
 - `INTAKE_REQUIRED_FIELDS` — обязательные поля карточки
 - `INTAKE_EMOTION_EVAL_ENABLED` — оценка эмоции через `TherapistEvaluator.assess_emotion` на каждом ходе intake
 - `INTAKE_MIN_RESPONSE_SENTENCES`, `INTAKE_MAX_QUESTION_WORDS`, `INTAKE_HOLD_EMOTION_INTENSITY_THRESHOLD` (дефолт 0.95) — `IntakeResponsePolicy`: вопросы по умолчанию `encourage`; `defer` при кризисе, `pushback_type=stage` (жалобы на вопросы / запрос советов → `INTAKE_STAGE_PUSHBACK_HANDLING` в system prompt), или `pushback_type=hard_stop` (явный отказ отвечать). Эмоция влияет на тон и длину отражения, не отменяет сбор карточки
-- `LLM_INTAKE_*` — отдельные параметры LLM для intake-агента (temperature ~0.52–0.58, max_tokens ~700–850)
+- LLM-параметры intake находятся в `config/llm_models.json` в `agents.intake.intake_turn`
 
 ### Релиз и откат
 
