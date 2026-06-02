@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Iterator
 from uuid import UUID, uuid4
 
@@ -26,7 +26,7 @@ class TraceContext:
     turn_id: UUID = field(default_factory=uuid4)
     account_id: int | None = None
     session_id: int | None = None
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     total_tokens_input: int = 0
     total_tokens_output: int = 0
     llm_latency_ms: int = 0

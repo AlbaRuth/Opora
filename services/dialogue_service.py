@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from agents.core import IntakeAgent, TherapistAgent
 from core.config import get_settings
@@ -82,7 +82,7 @@ class DialogueService:
                 error_message = str(exc)
                 raise
             finally:
-                finished_at = datetime.now(UTC)
+                finished_at = datetime.now(timezone.utc)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 try:
                     async with get_db_session() as session:
@@ -228,7 +228,7 @@ class DialogueService:
                 error_message = str(exc)
                 raise
             finally:
-                finished_at = datetime.now(UTC)
+                finished_at = datetime.now(timezone.utc)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 try:
                     async with get_db_session() as session:
