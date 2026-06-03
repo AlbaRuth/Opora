@@ -7,10 +7,12 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.channels import CHANNEL_TELEGRAM
+from core.clinical_card_format import card_has_clinical_data, format_full_patient_summary
+from core.profile_labels import sex_label
 from db.models import Account, Message, TherapySession, UserProfile
-from db.repositories import AgentLogRepository, ConversationTraceRepository, MessageRepository
+from db.repositories import AgentLogRepository, ClinicalProfileRepository, ConversationTraceRepository, MessageRepository
 from monitoring.api.deps import db_session, require_monitor_auth
-from monitoring.api.schemas import ChatSummary, MessageItem, TraceSummary
+from monitoring.api.schemas import ChatSummary, ClinicalCardResponse, MessageItem, TraceSummary
 
 router = APIRouter(
     prefix="/api/chats",
@@ -95,6 +97,57 @@ async def get_chat(
         dialog_count=therapy_session.dialog_count,
         created_at=therapy_session.created_at,
         updated_at=therapy_session.updated_at,
+    )
+
+
+@router.get("/{session_id}/clinical-card", response_model=ClinicalCardResponse)
+async def get_clinical_card(
+    session_id: int,
+    session: AsyncSession = Depends(db_session),
+) -> ClinicalCardResponse:
+    stmt = (
+        select(TherapySession, Account, UserProfile)
+        .join(Account, Account.id == TherapySession.account_id)
+        .outerjoin(UserProfile, UserProfile.account_id == Account.id)
+        .where(TherapySession.id == session_id)
+    )
+    row = (await session.execute(stmt)).one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    therapy_session, account, user_profile = row
+    profile_repo = ClinicalProfileRepository(session)
+    clinical = await profile_repo.get_by_account_id(account.id)
+    card = {
+        "current_problems": (clinical.current_problems if clinical else "") or "",
+        "mental_health_history": (clinical.mental_health_history if clinical else "") or "",
+        "physical_health_history": (clinical.physical_health_history if clinical else "") or "",
+        "intake_hypothesis": (clinical.intake_hypothesis if clinical else "") or "",
+        "intake_hypothesis_explanation": (clinical.intake_hypothesis_explanation if clinical else "") or "",
+    }
+    display_name = (
+        user_profile.effective_display_name if user_profile else account.first_name
+    ) or "Пациент"
+    age = str(user_profile.effective_age) if user_profile and user_profile.effective_age else "не указан"
+    sex_display = sex_label(user_profile.sex if user_profile else "prefer_not_to_say")
+    has_data = card_has_clinical_data(card)
+    summary_text = None
+    if has_data:
+        summary_text = format_full_patient_summary(
+            card=card,
+            display_name=display_name,
+            age=age,
+            sex_display=sex_display,
+        )
+    return ClinicalCardResponse(
+        session_id=therapy_session.id,
+        account_id=account.id,
+        display_name=display_name,
+        age=age,
+        sex_display=sex_display,
+        has_data=has_data,
+        initial_info_insufficient=bool(clinical.initial_info_insufficient) if clinical else False,
+        fields=card,
+        summary_text=summary_text,
     )
 
 
@@ -198,6 +251,7 @@ def _message_to_schema(message: Message) -> MessageItem:
         content=message.content,
         message_number=message.message_number,
         channel=message.channel,
+        trace_id=str(message.trace_id) if message.trace_id else None,
         primary_emotion=message.primary_emotion,
         emotional_intensity=message.emotional_intensity,
         created_at=message.created_at,
