@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import asdict
 from typing import Any
 
@@ -10,25 +11,50 @@ from agents.evaluators.structured_outputs import (
     SandboxScenario,
     validate_model,
 )
-from monitoring.sandbox.domain import PatientTemplate, PrescreeningProfile
 from services.llm import LlmGateway
+
+PATIENT_ARCHETYPES = (
+    "тревожный профессионал с телесными симптомами",
+    "выгоревший родитель без ресурса на себя",
+    "студент с паникой и страхом оценки",
+    "человек после утраты или разрыва отношений",
+    "перфекционист с бессонницей и самокритикой",
+    "сomatизирующий пациент с частыми обращениями к врачам",
+    "социально тревожный introvert на новой работе",
+    "человек с хроническим стрессом и раздражительностью",
+    "пациент с навязчивыми мыслями и ритуалами",
+    "человек с проблемами в отношениях и чувством одиночества",
+)
+
+
+def runtime_entropy(base_seed: str = "") -> str:
+    """Add per-call randomness so repeated runs stay unique."""
+    nonce = secrets.token_hex(8)
+    base = base_seed.strip()
+    if base:
+        return f"{base}\nruntime_nonce={nonce}"
+    return f"runtime_nonce={nonce}"
 
 
 def build_prescreening_generation_messages(seed: str) -> list[dict[str, str]]:
     """Build messages for AI-generated sandbox prescreening data."""
-    system_prompt = """Role:
-You generate fictional sandbox prescreening data for a psychological counseling bot.
+    system_prompt = """Роль:
+Ты генерируешь вымышленные данные prescreening для sandbox-теста психологического бота.
 
-Task:
-Return one coherent JSON object for a patient profile and counselor preference setup.
+Задача:
+Верни один JSON-объект с профилем пациента и настройками психолога. Каждый запуск должен давать нового, неповторимого пациента.
 
-Context:
-Use the seed if provided. If it is empty, invent a realistic adult patient. Do not use templates.
+Правила разнообразия:
+- Если seed пустой или общий — придумай новый случай с нуля.
+- Если seed задан — используй его только как направление, но не копируй предыдущие прогоны дословно.
+- Выбери один архетип из списка или придумай свой, но не повторяй шаблонные имена вроде Elena/Julian Vance.
+- Имена, возраст, пол, стиль обращения и brief должны быть правдоподобны для России/русскоязычного контекста.
+- Все текстовые поля JSON пиши по-русски.
 
-Clinical boundaries:
-Avoid graphic content. Do not include real personal data. Keep the situation plausible.
+Клинические границы:
+Без графики, без реальных персональных данных, без диагнозов как установленных фактов.
 
-Output schema:
+Схема JSON:
 {
   "patient_name": "string",
   "patient_age": 32,
@@ -40,11 +66,24 @@ Output schema:
   "scenario_brief": "string"
 }
 
-Failure behavior:
-Return JSON only."""
+Примеры архетипов (выбери один или свой):
+- тревожный профессионал
+- выгоревший родитель
+- студент с паникой
+- человек после утраты
+- перфекционист с бессонницей
+
+Формат ответа:
+Только JSON, без markdown и пояснений."""
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Seed for sandbox prescreening:\n{seed or 'No seed provided.'}"},
+        {
+            "role": "user",
+            "content": (
+                f"Seed для prescreening:\n{seed or 'seed не задан — придумай полностью нового пациента.'}\n\n"
+                f"Подсказка по архетипам:\n- " + "\n- ".join(PATIENT_ARCHETYPES)
+            ),
+        },
     ]
 
 
@@ -54,18 +93,25 @@ def build_scenario_generation_messages(
     prescreening_profile: dict[str, Any],
 ) -> list[dict[str, str]]:
     """Build messages for AI-generated sandbox clinical scenario."""
-    system_prompt = """Role:
-You generate a clinically plausible fictional scenario for sandbox testing.
+    system_prompt = """Роль:
+Ты генерируешь клинически правдоподобный вымышленный сценарий для sandbox-теста.
 
-Task:
-Create a patient situation consistent with the prescreening profile. This is not a template:
-invent a fresh situation every time based on the seed and profile.
+Задача:
+Создай уникальную ситуацию пациента, согласованную с prescreening-профилем. Это не шаблон из базы: каждый раз новая история, новые детали, новый эмоциональный рисунок.
 
-Clinical boundaries:
-Keep details safe for a test environment. Use cautious non-diagnostic language.
+Правила разнообразия:
+- Не повторяй типовые формулировки между запусками.
+- Сам выбери архетип/линию кейса (можно из brief профиля, можно новый).
+- Сделай hidden_context с 3–6 конкретными фактами, которые пациент раскрывает не сразу.
+- cooperation_style опиши по-русски (например: «открытый», «осторожный, но честный», «сначала уклончивый»).
+- Все строковые поля JSON — только на русском языке.
 
-Output schema:
+Клинические границы:
+Безопасно для тестовой среды, без графики, без категоричных диагнозов.
+
+Схема JSON:
 {
+  "persona_archetype": "string",
   "presenting_problem": "string",
   "mental_health_history": "string",
   "physical_health_history": "string",
@@ -74,18 +120,20 @@ Output schema:
   "intake_hypothesis_explanation": "string",
   "hidden_context": ["string"],
   "emotional_arc": "string",
-  "cooperation_style": "string"
+  "cooperation_style": "string",
+  "speech_style": "string"
 }
 
-Failure behavior:
-Return JSON only."""
+Формат ответа:
+Только JSON, без markdown и пояснений."""
     return [
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": (
                 f"Prescreening profile:\n{prescreening_profile}\n\n"
-                f"Scenario seed:\n{seed or 'No seed provided.'}"
+                f"Scenario seed:\n{seed or 'seed не задан — придумай новый случай.'}\n\n"
+                f"Подсказка по архетипам:\n- " + "\n- ".join(PATIENT_ARCHETYPES)
             ),
         },
     ]
@@ -93,7 +141,6 @@ Return JSON only."""
 
 def build_auto_patient_messages(
     *,
-    template: PatientTemplate | None = None,
     conversation: list[dict[str, str]],
     start_phase: str = "intake",
     prescreening_profile: dict[str, Any] | None = None,
@@ -101,60 +148,61 @@ def build_auto_patient_messages(
     generated_scenario: dict[str, Any] | None = None,
     test_goal: str = "",
     context_limit: int | None = None,
+    turn_number: int = 1,
+    entropy: str = "",
 ) -> list[dict[str, str]]:
     """Build OpenAI-compatible messages that keep the model in patient role."""
-    legacy_context = ""
-    if template is not None:
-        legacy_context = f"""
-Legacy persona source:
-- name: {template.name}
-- persona: {template.persona}
-- presenting_problem: {template.presenting_problem}
-- hidden_facts: {template.hidden_facts}
-- emotional_trajectory: {template.emotional_trajectory}
-- cooperation_level: {template.cooperation_level}
-- safety_boundaries: {template.safety_boundaries}
-- stop_conditions: {template.stop_conditions}
-"""
     transcript = "\n".join(
         f"{item['role']}: {item['content']}"
         for item in conversation[-(context_limit or 12):]
     )
+    scenario = generated_scenario or {}
+    archetype = scenario.get("persona_archetype") or scenario.get("cooperation_style") or "не задан"
 
-    system_prompt = f"""Role:
-You simulate a living patient for sandbox testing of a counseling bot.
+    system_prompt = f"""Роль:
+Ты симулируешь живого пациента в sandbox-тесте counseling-бота.
 
-Task:
-Write only the next patient message. Stay inside the patient's lived perspective.
+Задача:
+Напиши только следующую реплику пациента от первого лица.
 
-Context:
-- Sandbox start phase: {start_phase}
-- Test goal: {test_goal or "General end-to-end sandbox validation"}
+Язык:
+ВСЕГДА пиши только по-русски. Даже если в диалоге встречается английский — отвечай по-русски.
+
+Стиль и смелость:
+- Не стесняйся: говори прямо о симптомах, эмоциях, теле, отношениях, страхах, стыде, быте.
+- Будь живым человеком: можно путаться, уточнять, менять формулировки, проявлять эмоции.
+- Избегай канцелярита, шаблонов и «идеальных» ответов пациента из учебника.
+- Каждая реплика должна звучать по-новому; не повторяй одни и те же заходы.
+
+Контекст:
+- Фаза sandbox: {start_phase}
+- Номер реплики пациента: {turn_number}
+- Цель теста: {test_goal or "сквозная проверка intake/therapy pipeline"}
 - Prescreening profile: {prescreening_profile or {}}
 - Clinical card: {clinical_card or {}}
-- Generated scenario: {generated_scenario or {}}
-{legacy_context}
+- Generated scenario: {scenario}
+- Архетип/линия кейса: {archetype}
+- Энтропия запуска: {entropy or "не задана"}
 
-Patient behavior:
-- Answer naturally, briefly, and with incomplete information unless trust has developed.
-- In prescreening, answer the profile question being asked; do not jump into therapy unless asked.
-- In intake, gradually reveal relevant problems, history, bodily context, and uncertainty.
-- In therapy, respond to the counselor's last message as a real patient would.
-- Maintain continuity with previous turns and do not contradict known profile/scenario facts.
-- Do not disclose that this is a simulation, LLM, test agent, prompt, scenario, or sandbox.
-- Do not analyze the bot, explain your role, produce JSON, or give developer notes.
+Поведение по фазам:
+- prescreening: отвечай на текущий вопрос анкеты, не уходи в терапию раньше времени.
+- intake: постепенно раскрывай проблемы, историю, тело, сомнения; часть hidden_context раскрывай не сразу.
+- therapy: реагируй на последнюю реплику психолога как реальный пациент.
 
-Failure behavior:
-If the next move is unclear, write a plausible short patient reply in Russian."""
+Запреты:
+- Не раскрывай, что это симуляция, LLM, тест, sandbox, prompt или сценарий.
+- Не анализируй бота, не давай JSON, не пиши пояснения разработчику.
+
+Если следующий шаг неочевиден — всё равно дай короткую правдоподобную реплику пациента по-русски."""
 
     return [
         {"role": "system", "content": system_prompt.strip()},
         {
             "role": "user",
             "content": (
-                "Current dialogue:\n"
-                f"{transcript or 'The dialogue has not started yet.'}\n\n"
-                "Write the next patient message only."
+                "Текущий диалог:\n"
+                f"{transcript or 'Диалог ещё не начался.'}\n\n"
+                "Напиши только следующую реплику пациента."
             ),
         },
     ]
@@ -170,7 +218,6 @@ class AutoPatient:
     async def next_message(
         self,
         *,
-        template: PatientTemplate | None = None,
         conversation: list[dict[str, str]],
         start_phase: str = "intake",
         prescreening_profile: dict[str, Any] | None = None,
@@ -179,16 +226,20 @@ class AutoPatient:
         test_goal: str = "",
         account_id: int | None = None,
         session_id: int | None = None,
+        turn_number: int = 1,
+        entropy: str = "",
     ) -> dict[str, Any]:
+        context_limit = self.llm_config.sandbox.auto_patient_context_messages
         messages = build_auto_patient_messages(
-            template=template,
             conversation=conversation,
             start_phase=start_phase,
             prescreening_profile=prescreening_profile,
             clinical_card=clinical_card,
             generated_scenario=generated_scenario,
             test_goal=test_goal,
-            context_limit=self.llm_config.sandbox.auto_patient_context_messages,
+            context_limit=context_limit,
+            turn_number=turn_number,
+            entropy=entropy,
         )
         result = await self.llm_gateway.complete(
             agent_type="sandbox_patient",
@@ -198,14 +249,15 @@ class AutoPatient:
             session_id=session_id,
             prompt_template="build_auto_patient_messages",
             prompt_variables={
-                "template": asdict(template) if template else None,
                 "conversation": conversation,
                 "start_phase": start_phase,
                 "prescreening_profile": prescreening_profile or {},
                 "clinical_card": clinical_card or {},
                 "generated_scenario": generated_scenario or {},
                 "test_goal": test_goal,
-                "context_limit": self.llm_config.sandbox.auto_patient_context_messages,
+                "context_limit": context_limit,
+                "turn_number": turn_number,
+                "entropy": entropy,
             },
         )
         return {
@@ -224,7 +276,8 @@ class AutoPatient:
         account_id: int | None = None,
         session_id: int | None = None,
     ) -> SandboxPrescreeningProfile:
-        messages = build_prescreening_generation_messages(seed)
+        effective_seed = runtime_entropy(seed)
+        messages = build_prescreening_generation_messages(effective_seed)
         result = await self.llm_gateway.complete(
             agent_type="sandbox_patient",
             task_name="prescreening_profile_generation",
@@ -233,7 +286,7 @@ class AutoPatient:
             session_id=session_id,
             prompt=messages[-1]["content"],
             prompt_template="build_prescreening_generation_messages",
-            prompt_variables={"seed": seed},
+            prompt_variables={"seed": effective_seed},
         )
         if result.get("success"):
             validated = validate_model(SandboxPrescreeningProfile, result.get("content"))
@@ -245,19 +298,14 @@ class AutoPatient:
         self,
         *,
         seed: str = "",
-        prescreening_profile: PrescreeningProfile | SandboxPrescreeningProfile | dict[str, Any],
+        prescreening_profile: dict[str, Any],
         account_id: int | None = None,
         session_id: int | None = None,
     ) -> SandboxScenario:
-        if hasattr(prescreening_profile, "model_dump"):
-            profile_dict = prescreening_profile.model_dump()
-        elif hasattr(prescreening_profile, "__dataclass_fields__"):
-            profile_dict = asdict(prescreening_profile)
-        else:
-            profile_dict = dict(prescreening_profile)
-
+        effective_seed = runtime_entropy(seed)
+        profile_dict = dict(prescreening_profile)
         messages = build_scenario_generation_messages(
-            seed=seed,
+            seed=effective_seed,
             prescreening_profile=profile_dict,
         )
         result = await self.llm_gateway.complete(
@@ -268,7 +316,7 @@ class AutoPatient:
             session_id=session_id,
             prompt=messages[-1]["content"],
             prompt_template="build_scenario_generation_messages",
-            prompt_variables={"seed": seed, "prescreening_profile": profile_dict},
+            prompt_variables={"seed": effective_seed, "prescreening_profile": profile_dict},
         )
         if result.get("success"):
             validated = validate_model(SandboxScenario, result.get("content"))

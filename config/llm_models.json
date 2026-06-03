@@ -88,27 +88,27 @@
     "sandbox_patient": {
       "auto_patient": {
         "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.85,
-        "max_tokens": 220,
-        "top_p": 0.95,
-        "frequency_penalty": 0.1,
-        "presence_penalty": 0.1
+        "temperature": 0.92,
+        "max_tokens": 2000,
+        "top_p": 0.97,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.2
       },
       "prescreening_profile_generation": {
         "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.75,
-        "max_tokens": 320,
-        "top_p": 0.95,
-        "frequency_penalty": 0.05,
-        "presence_penalty": 0.05
+        "temperature": 0.9,
+        "max_tokens": 420,
+        "top_p": 0.97,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.15
       },
       "scenario_generation": {
         "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.8,
-        "max_tokens": 520,
-        "top_p": 0.95,
-        "frequency_penalty": 0.05,
-        "presence_penalty": 0.1
+        "temperature": 0.92,
+        "max_tokens": 720,
+        "top_p": 0.97,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.2
       }
     },
     "sandbox_judge": {
@@ -132,7 +132,7 @@
     "store_prompt_variables": true
   },
   "sandbox": {
-    "auto_patient_context_messages": 12,
+    "auto_patient_context_messages": 2000,
     "default_auto_run_turns": 3,
     "max_auto_run_turns": 20
   }

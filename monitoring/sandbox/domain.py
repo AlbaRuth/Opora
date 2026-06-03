@@ -29,7 +29,7 @@ class SandboxSessionSpec:
     batch_id: int | None = None
     patient_template_id: int | None = None
     start_phase: str = "intake"
-    prescreening_mode: str = "manual"
+    prescreening_mode: str = "ai_generated"
     manual_prescreening_profile: PrescreeningProfile | None = None
     ai_prescreening_seed: str = ""
     scenario_seed: str = ""

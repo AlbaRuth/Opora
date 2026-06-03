@@ -38,6 +38,22 @@ def get_runner() -> SandboxRunner:
     return SandboxRunner()
 
 
+def _sandbox_turn_response(run_id: int, turn) -> SandboxTurnResponse:
+    metadata = turn.turn_metadata or {}
+    return SandboxTurnResponse(
+        run_id=run_id,
+        trace_id=turn.trace_id,
+        patient_message=turn.patient_message,
+        assistant_message=turn.assistant_message,
+        latency_ms=turn.latency_ms,
+        metadata=metadata,
+        stop_reason=turn.stop_reason,
+        patient_trace_id=metadata.get("patient_trace_id"),
+        intake_completed=bool(metadata.get("intake_completed")),
+        closure_segments=metadata.get("closure_segments"),
+    )
+
+
 @router.post("/sessions", response_model=SandboxSessionResponse)
 async def create_sandbox_session(
     request: SandboxSessionCreate,
@@ -94,14 +110,7 @@ async def send_sandbox_message(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return SandboxTurnResponse(
-        run_id=run_id,
-        trace_id=turn.trace_id,
-        patient_message=turn.patient_message,
-        assistant_message=turn.assistant_message,
-        latency_ms=turn.latency_ms,
-        metadata=turn.turn_metadata,
-    )
+    return _sandbox_turn_response(run_id, turn)
 
 
 @router.post("/sessions/{run_id}/auto-run", response_model=list[SandboxTurnResponse])
@@ -118,17 +127,7 @@ async def auto_run_sandbox(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return [
-        SandboxTurnResponse(
-            run_id=run_id,
-            trace_id=turn.trace_id,
-            patient_message=turn.patient_message,
-            assistant_message=turn.assistant_message,
-            latency_ms=turn.latency_ms,
-            metadata=turn.turn_metadata,
-        )
-        for turn in turns
-    ]
+    return [_sandbox_turn_response(run_id, turn) for turn in turns]
 
 
 @router.post("/sessions/{run_id}/stop", response_model=SandboxSessionResponse)
@@ -185,6 +184,34 @@ async def get_default_model_config() -> dict:
     return get_llm_config_resolver().effective_config()
 
 
+@router.post("/sessions/{run_id}/judge", response_model=SandboxSessionResponse)
+async def judge_sandbox_session(
+    run_id: int,
+    runner: SandboxRunner = Depends(get_runner),
+    session: AsyncSession = Depends(db_session),
+) -> SandboxSessionResponse:
+    try:
+        await runner.maybe_judge_run(run_id, force=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    run = await SandboxRunRepository(session).get_by_id(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Sandbox run not found")
+    return SandboxSessionResponse(
+        run_id=run.id,
+        account_id=run.account_id,
+        session_id=run.session_id,
+        status=run.status,
+        start_phase=(run.run_metadata or {}).get("start_phase"),
+        prescreening_mode=(run.run_metadata or {}).get("prescreening_mode"),
+        generated_prescreening_profile=(run.run_metadata or {}).get("generated_prescreening_profile"),
+        generated_scenario=(run.run_metadata or {}).get("generated_scenario"),
+        effective_model_config=run.model_config,
+        batch_id=run.batch_id,
+        judge_result=(run.run_metadata or {}).get("judge_result"),
+    )
+
+
 @router.get("/sessions/{run_id}", response_model=SandboxSessionResponse)
 async def get_sandbox_session(
     run_id: int,
@@ -211,6 +238,7 @@ async def get_sandbox_session(
 @router.post("/batches", response_model=SandboxBatchResponse)
 async def create_sandbox_batch(
     request: SandboxBatchCreate,
+    session: AsyncSession = Depends(db_session),
     runner: SandboxRunner = Depends(get_runner),
 ) -> SandboxBatchResponse:
     batch = await runner.run_batch(
@@ -224,7 +252,10 @@ async def create_sandbox_batch(
         seed=request.seed,
         model_overrides=request.model_overrides,
     )
-    return _batch_to_response(batch, created_runs=request.count)
+    if not batch:
+        raise HTTPException(status_code=500, detail="Sandbox batch was not created")
+    runs = await SandboxRunRepository(session).list_for_batch(batch.id)
+    return _batch_to_response(batch, created_runs=len(runs))
 
 
 @router.get("/batches/{batch_id}", response_model=SandboxBatchResponse)
@@ -272,17 +303,7 @@ async def list_sandbox_turns(
     session: AsyncSession = Depends(db_session),
 ) -> list[SandboxTurnResponse]:
     turns = await SandboxTurnRepository(session).list_for_run(run_id)
-    return [
-        SandboxTurnResponse(
-            run_id=run_id,
-            trace_id=turn.trace_id,
-            patient_message=turn.patient_message,
-            assistant_message=turn.assistant_message,
-            latency_ms=turn.latency_ms,
-            metadata=turn.turn_metadata,
-        )
-        for turn in turns
-    ]
+    return [_sandbox_turn_response(run_id, turn) for turn in turns]
 
 
 @router.get("/sessions/{run_id}/export")
@@ -332,7 +353,7 @@ def _batch_to_response(batch, *, created_runs: int) -> SandboxBatchResponse:
         parallelism=batch.parallelism,
         max_turns_per_run=batch.max_turns_per_run,
         created_runs=created_runs,
-        model_config=batch.model_config,
+        llm_model_config=batch.model_config,
         metadata=batch.batch_metadata,
         started_at=batch.started_at,
         finished_at=batch.finished_at,
@@ -423,11 +444,57 @@ def _sandbox_export_markdown(payload: dict) -> str:
                 f"Psychologist: {turn['assistant_message']}",
             ]
         )
-    lines.extend(["", "## Judge Result", "```json"])
-    import json
-
-    lines.append(json.dumps(payload.get("judge_result") or {}, ensure_ascii=False, indent=2))
-    lines.extend(["```", "", "## LLM Calls"])
+    judge = payload.get("judge_result") or {}
+    lines.extend(["", "## QA Judge"])
+    if not judge:
+        lines.append("_Оценка не запускалась._")
+    else:
+        verdict = judge.get("overall_verdict", "—")
+        score = judge.get("overall_score", "—")
+        lines.extend([f"- **Verdict:** {verdict}", f"- **Overall score:** {score}", ""])
+        therapist = judge.get("therapist_quality") or {}
+        extraction = judge.get("extraction_quality") or {}
+        lines.extend(
+            [
+                f"### Therapist quality ({therapist.get('score', '—')}/10)",
+                "",
+            ]
+        )
+        for finding in therapist.get("findings") or []:
+            lines.append(f"- {finding}")
+        lines.extend(
+            [
+                "",
+                f"### Extraction quality ({extraction.get('score', '—')}/10)",
+                "",
+            ]
+        )
+        for finding in extraction.get("findings") or []:
+            lines.append(f"- {finding}")
+        missing = extraction.get("missing_in_card") or []
+        if missing:
+            lines.extend(["", "**Missing in card:**"])
+            for item in missing:
+                lines.append(f"- {item}")
+        hallucinated = extraction.get("hallucinated_in_card") or []
+        if hallucinated:
+            lines.extend(["", "**Hallucinated in card:**"])
+            for item in hallucinated:
+                lines.append(f"- {item}")
+        bottlenecks = judge.get("architecture_bottlenecks") or []
+        if bottlenecks:
+            lines.extend(["", "### Architecture bottlenecks", ""])
+            for item in bottlenecks:
+                lines.append(
+                    f"- Turn {item.get('turn_number')}: [{item.get('severity')}] "
+                    f"{item.get('component')} — {item.get('issue')}"
+                )
+        fixes = judge.get("recommended_fixes") or []
+        if fixes:
+            lines.extend(["", "### Recommended fixes", ""])
+            for fix in fixes:
+                lines.append(f"- {fix}")
+    lines.extend(["", "## LLM Calls"])
     for call in payload["llm_calls"]:
         lines.extend(
             [

@@ -29,7 +29,7 @@ from db.repositories import (
     UserProfileRepository,
 )
 from db.session import get_db_session
-from monitoring.sandbox.auto_patient import AutoPatient
+from monitoring.sandbox.auto_patient import AutoPatient, runtime_entropy
 from monitoring.sandbox.domain import PrescreeningProfile, SandboxSessionSpec
 from monitoring.sandbox.judge import SandboxJudge
 from observability.tracing import TraceContext, trace_scope
@@ -79,6 +79,8 @@ class SandboxRunner:
                 language_code="ru",
                 origin=CHANNEL_SANDBOX,
             )
+            # LLM setup calls log through separate DB sessions; commit account first.
+            await session.commit()
             trace = TraceContext(channel="sandbox", source="sandbox_setup")
             trace.account_id = account.id
             trace.sandbox_batch_id = request.batch_id
@@ -197,7 +199,7 @@ class SandboxRunner:
     ) -> tuple[PrescreeningProfile, object | None]:
         if request.prescreening_mode == "ai_generated":
             generated = await self.auto_patient.generate_prescreening_profile(
-                seed=request.ai_prescreening_seed,
+                seed=request.ai_prescreening_seed or str(uuid4()),
                 account_id=account_id,
             )
             return (
@@ -232,9 +234,10 @@ class SandboxRunner:
     ):
         if request.patient_persona_source == "legacy_template":
             return None
+        scenario_seed = request.scenario_seed or request.ai_prescreening_seed or str(uuid4())
         return await self.auto_patient.generate_scenario(
-            seed=request.scenario_seed or request.ai_prescreening_seed,
-            prescreening_profile=profile,
+            seed=scenario_seed,
+            prescreening_profile=asdict(profile),
             account_id=account_id,
         )
 
@@ -269,6 +272,7 @@ class SandboxRunner:
         run_id: int,
         message: str,
         model_overrides: dict | None = None,
+        patient_trace_id: str | None = None,
     ) -> SandboxTurn:
         run, account = await self._load_run_account(run_id)
         run_metadata = run.run_metadata or {}
@@ -287,22 +291,38 @@ class SandboxRunner:
                 source="sandbox_ui",
             )
         latency_ms = int((time.perf_counter() - started) * 1000)
+        psychologist_trace_id = self._extract_trace_id(result)
+        intake_completed = bool(result.get("intake_completed"))
+        turn_metadata = {
+            "session_ended": result.get("session_ended", False),
+            "strategy": result.get("strategy"),
+            "model_overrides": model_overrides,
+            "effective_config": self.llm_config_resolver.effective_config(
+                overrides=overrides,
+            ),
+            "patient_trace_id": patient_trace_id,
+            "psychologist_trace_id": psychologist_trace_id,
+            "intake_completed": intake_completed,
+            "closure_segments": result.get("closure_segments"),
+            "initial_info_insufficient": result.get("initial_info_insufficient"),
+        }
         async with get_db_session() as session:
             turn_repo = SandboxTurnRepository(session)
             turn = await turn_repo.create_turn(
                 run_id=run.id,
-                trace_id=self._extract_trace_id(result),
+                trace_id=psychologist_trace_id,
                 patient_message=message,
                 assistant_message=result.get("response", ""),
                 latency_ms=latency_ms,
-                metadata={
-                    "session_ended": result.get("session_ended", False),
-                    "strategy": result.get("strategy"),
-                    "model_overrides": model_overrides,
-                    "effective_config": self.llm_config_resolver.effective_config(
-                        overrides=overrides,
-                    ),
-                },
+                stop_reason="intake_completed" if intake_completed else None,
+                metadata=turn_metadata,
+            )
+        if patient_trace_id:
+            await self._link_trace_to_sandbox(
+                trace_id=patient_trace_id,
+                session_id=run.session_id,
+                run_id=run.id,
+                batch_id=run.batch_id,
             )
         if turn.trace_id:
             await self._link_trace_to_sandbox(
@@ -388,17 +408,18 @@ class SandboxRunner:
     ) -> list[SandboxTurn]:
         run, account = await self._load_run_account(run_id)
         overrides = self._merge_overrides(run, model_overrides)
-        template = await self._load_template(run)
+        metadata = run.run_metadata or {}
+        max_turns_limit = self.llm_config_resolver.config.sandbox.max_auto_run_turns
         turns: list[SandboxTurn] = []
-        configured_max_turns = template.max_turns if template else self.llm_config_resolver.config.sandbox.max_auto_run_turns
-        for _ in range(min(max_turns, configured_max_turns)):
+        for turn_index in range(min(max_turns, max_turns_limit)):
             conversation = await self._conversation_for_run(run.id)
             generated = await self._generate_auto_patient_message(
                 run=run,
                 account=account,
-                template=template,
                 conversation=conversation,
                 overrides=overrides,
+                turn_number=turn_index + 1,
+                entropy=metadata.get("scenario_seed") or metadata.get("ai_prescreening_seed") or "",
             )
             if not generated["success"] or not generated["content"]:
                 break
@@ -406,11 +427,31 @@ class SandboxRunner:
                 run.id,
                 generated["content"],
                 model_overrides=overrides,
+                patient_trace_id=generated.get("trace_id"),
             )
             turns.append(turn)
             if turn.stop_reason:
                 break
         return turns
+
+    async def maybe_judge_run(
+        self,
+        run_id: int,
+        *,
+        force: bool = False,
+        batch_context: dict | None = None,
+    ) -> dict | None:
+        """Run judge when transcript exists; skip if result already stored unless force."""
+        async with get_db_session() as session:
+            db_run = await SandboxRunRepository(session).get_by_id(run_id)
+            if not db_run:
+                return None
+            if not force and (db_run.run_metadata or {}).get("judge_result"):
+                return (db_run.run_metadata or {}).get("judge_result")
+        turns = await self._conversation_for_run(run_id)
+        if not turns:
+            return None
+        return await self.judge_run(run_id, batch_context=batch_context)
 
     async def run_batch(
         self,
@@ -476,7 +517,11 @@ class SandboxRunner:
                     max_turns_per_run,
                     model_overrides=model_overrides,
                 )
-                judge_result = await self.judge_run(run.id, batch_context={"batch_id": batch_id})
+                judge_result = await self.maybe_judge_run(
+                    run.id,
+                    force=True,
+                    batch_context={"batch_id": batch_id},
+                )
                 return {
                     "run_id": run.id,
                     "session_id": run.session_id,
@@ -487,12 +532,19 @@ class SandboxRunner:
 
         status = "completed"
         stop_reason = None
+        results: list[dict] = []
         try:
-            results = await asyncio.gather(*(run_one(i) for i in range(count)))
-        except Exception as exc:
-            status = "error"
-            stop_reason = str(exc)
-            raise
+            gathered = await asyncio.gather(*(run_one(i) for i in range(count)), return_exceptions=True)
+            results = []
+            errors: list[str] = []
+            for item in gathered:
+                if isinstance(item, Exception):
+                    errors.append(str(item))
+                else:
+                    results.append(item)
+            if errors:
+                status = "error" if not results else "partial"
+                stop_reason = errors[0]
         finally:
             async with get_db_session() as session:
                 repo = SandboxBatchRepository(session)
@@ -529,6 +581,7 @@ class SandboxRunner:
         error_message: str | None = None
         with trace_scope(trace):
             try:
+                clinical_card = await self._clinical_card_for_account(account.id)
                 result = await self.sandbox_judge.judge_intake_dialogue(
                     account_id=account.id,
                     session_id=run.session_id,
@@ -537,6 +590,7 @@ class SandboxRunner:
                     traces=traces,
                     profile=metadata.get("effective_prescreening_profile") or {},
                     scenario=metadata.get("generated_scenario") or {},
+                    clinical_card=clinical_card,
                     batch_context=batch_context,
                 )
             except Exception as exc:
@@ -613,9 +667,10 @@ class SandboxRunner:
         *,
         run: SandboxRun,
         account: Account,
-        template,
         conversation: list[dict[str, str]],
         overrides: dict | None,
+        turn_number: int = 1,
+        entropy: str = "",
     ) -> dict:
         trace = TraceContext(channel="sandbox", source="sandbox_auto_patient")
         trace.account_id = account.id
@@ -627,8 +682,7 @@ class SandboxRunner:
         error_message: str | None = None
         with trace_scope(trace), llm_overrides_scope(overrides):
             try:
-                return await self.auto_patient.next_message(
-                    template=template,
+                result = await self.auto_patient.next_message(
                     conversation=conversation,
                     start_phase=(run.run_metadata or {}).get("start_phase", "intake"),
                     prescreening_profile=(run.run_metadata or {}).get(
@@ -637,10 +691,16 @@ class SandboxRunner:
                     ),
                     clinical_card=await self._clinical_card_for_account(account.id),
                     generated_scenario=(run.run_metadata or {}).get("generated_scenario", {}),
-                    test_goal=(run.run_metadata or {}).get("scenario_seed", ""),
+                    test_goal=entropy or (run.run_metadata or {}).get("scenario_seed", ""),
+                    turn_number=turn_number,
+                    entropy=runtime_entropy(entropy),
                     account_id=account.id,
                     session_id=run.session_id,
                 )
+                return {
+                    **result,
+                    "trace_id": str(trace.trace_id),
+                }
             except Exception as exc:
                 status = "error"
                 error_message = str(exc)

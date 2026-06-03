@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HealthResponse(BaseModel):
@@ -35,6 +35,7 @@ class MessageItem(BaseModel):
     content: str
     message_number: int
     channel: str = "telegram"
+    trace_id: str | None = None
     primary_emotion: str | None = None
     emotional_intensity: float | None = None
     created_at: datetime
@@ -148,6 +149,8 @@ class SandboxBatchCreate(BaseModel):
 
 
 class SandboxBatchResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     batch_id: int
     name: str
     status: str
@@ -155,7 +158,7 @@ class SandboxBatchResponse(BaseModel):
     parallelism: int
     max_turns_per_run: int
     created_runs: int = 0
-    model_config: dict[str, Any] | None = None
+    llm_model_config: dict[str, Any] | None = Field(default=None, alias="model_config")
     metadata: dict[str, Any] | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -183,6 +186,10 @@ class SandboxTurnResponse(BaseModel):
     assistant_message: str
     latency_ms: int | None = None
     metadata: dict[str, Any] | None = None
+    stop_reason: str | None = None
+    patient_trace_id: str | None = None
+    intake_completed: bool = False
+    closure_segments: dict[str, Any] | None = None
 
 
 class PatientTemplateResponse(BaseModel):
@@ -197,3 +204,15 @@ class PatientTemplateResponse(BaseModel):
     safety_boundaries: list[str]
     max_turns: int
     stop_conditions: list[str]
+
+
+class ClinicalCardResponse(BaseModel):
+    session_id: int
+    account_id: int
+    display_name: str | None = None
+    age: str | None = None
+    sex_display: str | None = None
+    has_data: bool = False
+    initial_info_insufficient: bool = False
+    fields: dict[str, str] = Field(default_factory=dict)
+    summary_text: str | None = None

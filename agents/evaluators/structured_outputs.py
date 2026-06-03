@@ -97,6 +97,7 @@ class SandboxPrescreeningProfile(BaseModel):
 
 
 class SandboxScenario(BaseModel):
+    persona_archetype: str = ""
     presenting_problem: str = ""
     mental_health_history: str = ""
     physical_health_history: str = ""
@@ -106,6 +107,55 @@ class SandboxScenario(BaseModel):
     hidden_context: list[str] = Field(default_factory=list)
     emotional_arc: str = ""
     cooperation_style: str = ""
+    speech_style: str = ""
+
+
+class SandboxJudgeQualitySection(BaseModel):
+    score: float = Field(default=0.0, ge=0.0, le=10.0)
+    findings: list[str] = Field(default_factory=list)
+    good_examples: list[str] = Field(default_factory=list)
+    bad_examples: list[str] = Field(default_factory=list)
+
+
+class SandboxJudgeExtractionQuality(BaseModel):
+    score: float = Field(default=0.0, ge=0.0, le=10.0)
+    findings: list[str] = Field(default_factory=list)
+    missing_in_card: list[str] = Field(default_factory=list)
+    hallucinated_in_card: list[str] = Field(default_factory=list)
+
+
+class SandboxJudgeBottleneck(BaseModel):
+    turn_number: int = 0
+    component: Literal[
+        "intake",
+        "evaluator",
+        "therapist",
+        "auto_patient",
+        "llm_gateway",
+        "unknown",
+    ] = "unknown"
+    issue: str = ""
+    evidence: str = ""
+    severity: Literal["low", "medium", "high"] = "low"
+
+
+class SandboxJudgeResult(BaseModel):
+    overall_score: float = Field(default=0.0, ge=0.0, le=10.0)
+    overall_verdict: Literal["pass", "needs_review", "fail"] = "needs_review"
+    therapist_quality: SandboxJudgeQualitySection = Field(
+        default_factory=SandboxJudgeQualitySection
+    )
+    extraction_quality: SandboxJudgeExtractionQuality = Field(
+        default_factory=SandboxJudgeExtractionQuality
+    )
+    contextuality: dict[str, Any] = Field(default_factory=lambda: {"score": 0.0, "findings": []})
+    psychologist_liveness: dict[str, Any] = Field(
+        default_factory=lambda: {"score": 0.0, "findings": []}
+    )
+    architecture_bottlenecks: list[SandboxJudgeBottleneck] = Field(default_factory=list)
+    latency_notes: list[str] = Field(default_factory=list)
+    diversity_notes: list[str] = Field(default_factory=list)
+    recommended_fixes: list[str] = Field(default_factory=list)
 
 
 def validate_model(model_type: type[BaseModel], content: Any) -> BaseModel | None:
