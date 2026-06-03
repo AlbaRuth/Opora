@@ -100,7 +100,7 @@ class OpenRouterClient:
         if seed is not None:
             kwargs["seed"] = seed
         if reasoning is not None:
-            kwargs["reasoning"] = reasoning
+            kwargs["extra_body"] = {"reasoning": reasoning}
 
         generation_params = {
             "model": model,
