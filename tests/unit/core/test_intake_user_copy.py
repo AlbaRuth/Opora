@@ -61,3 +61,34 @@ def test_build_intake_completion_notice_insufficient_formal():
     assert "/summary" in text
     assert "первый этап" in text.lower()
     assert "основную информацию мы собрали" not in text.lower()
+
+
+def test_build_intake_extracted_summary_includes_card_fields():
+    from core.intake_user_copy import build_intake_extracted_summary
+
+    text = build_intake_extracted_summary(
+        {
+            "current_problems": "Тревога и бессонница",
+            "mental_health_history": "Эпизоды тревоги",
+            "physical_health_history": "Без хроники",
+            "intake_hypothesis": "Тревожное расстройство",
+            "intake_hypothesis_explanation": "Предварительно, по симптомам",
+        },
+        address_mode="formal",
+        initial_info_insufficient=False,
+    )
+    assert "зафиксирую" in text.lower()
+    assert "Тревога и бессонница" in text
+    assert "Предварительная клиническая гипотеза" in text
+
+
+def test_build_intake_extracted_summary_insufficient_intro():
+    from core.intake_user_copy import build_intake_extracted_summary
+
+    text = build_intake_extracted_summary(
+        {"current_problems": "Усталость"},
+        address_mode="informal",
+        initial_info_insufficient=True,
+    )
+    assert "не хватает данных" in text.lower()
+    assert "Усталость" in text

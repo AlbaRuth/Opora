@@ -1,5 +1,46 @@
 """User-facing scripted text for clinical intake (non-LLM)."""
 
+from core.clinical_card_format import (
+    card_has_clinical_data,
+    format_clinical_card_fields,
+    truncate_words,
+)
+
+
+def build_intake_extracted_summary(
+    card: dict[str, str],
+    *,
+    address_mode: str,
+    initial_info_insufficient: bool,
+    max_words: int = 180,
+) -> str:
+    """Patient-facing summary of extracted intake card fields at closure."""
+    if not card_has_clinical_data(card):
+        if address_mode == "informal":
+            return (
+                "Я пока зафиксировал только часть информации — "
+                "полную сводку можно будет посмотреть по команде /summary."
+            )
+        return (
+            "Я пока зафиксировал только часть информации — "
+            "полную сводку можно будет посмотреть по команде /summary."
+        )
+
+    if initial_info_insufficient:
+        intro = (
+            "Пока у нас не хватает данных для полной картины, но вот что уже записано:"
+            if address_mode == "formal"
+            else "Пока не хватает данных для полной картины, но вот что уже записано:"
+        )
+    elif address_mode == "informal":
+        intro = "Кратко зафиксирую, что мы уже записали:"
+    else:
+        intro = "Кратко зафиксирую, что мы уже записали:"
+
+    body = format_clinical_card_fields(card)
+    combined = f"{intro}\n\n{body}"
+    return truncate_words(combined, max_words)
+
 
 def build_intake_completion_notice(
     address_mode: str,

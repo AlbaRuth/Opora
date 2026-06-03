@@ -75,7 +75,14 @@ class TestDialogueServiceIntake:
                 "therapist_response": "Олег, теперь я знаю достаточно информации о вас.",
                 "intake_completed": True,
                 "missing_fields": [],
-                "card_updates": {},
+                "initial_info_insufficient": False,
+                "card_updates": {
+                    "current_problems": "Тревога и нарушение сна",
+                    "mental_health_history": "Тревожность несколько лет",
+                    "physical_health_history": "Без хроники",
+                    "intake_hypothesis": "Тревожное состояние",
+                    "intake_hypothesis_explanation": "Предварительно, по описанным симптомам",
+                },
             }
         )
         service.therapist_agent = MagicMock()
@@ -87,9 +94,17 @@ class TestDialogueServiceIntake:
         )
 
         assert result["session_ended"] is False
+        assert result["intake_completed"] is True
         assert "достаточно" in result["response"].lower()
         assert "/summary" in result["response"]
         assert "основную информацию" in result["response"].lower()
+        assert "Тревога и нарушение сна" in result["response"]
+        assert "зафиксирую" in result["response"].lower()
+        segments = result["closure_segments"]
+        assert segments is not None
+        assert "достаточно" in segments["therapist_closure"].lower()
+        assert "Тревога и нарушение сна" in segments["extracted_summary"]
+        assert "основную информацию" in segments["completion_notice"].lower()
         service.intake_agent.process_patient_input.assert_awaited_once()
         service.therapist_agent.process_patient_input.assert_not_called()
 
@@ -180,9 +195,13 @@ class TestDialogueServiceIntake:
         )
 
         assert result["session_ended"] is False
+        assert result["intake_completed"] is True
         assert "/summary" in result["response"]
         assert "первый этап" in result["response"].lower()
         assert "основную информацию мы собрали" not in result["response"].lower()
+        segments = result["closure_segments"]
+        assert segments is not None
+        assert "первый этап" in segments["completion_notice"].lower()
         service.intake_agent.process_patient_input.assert_awaited_once()
         service.therapist_agent.process_patient_input.assert_not_called()
 

@@ -222,9 +222,13 @@ ANTI-PATTERNS:
 - Template openings repeated across the session.
 
 COMPLETION MESSAGE (when is_intake_complete is true):
-- Acknowledge understanding; summarize key points naturally (not as a bullet list).
+- This is the FINAL intake turn — set is_intake_complete=true and write patient_response_ru as closure.
+- Acknowledge understanding; summarize 2–3 key themes from the card fields you just updated
+  (current_problems, mental_health_history, physical_health_history, hypothesis) — naturally in prose,
+  NOT as a bullet list of five fields.
 - Include preliminary hypothesis with explanation; emphasize it is preliminary.
 - Transition smoothly to ongoing therapy; name is optional once here.
+- Do NOT tell the patient to type /summary — the system appends a structured summary separately.
 """
 
     INTAKE_ANTI_REPETITION_STATIC = """
@@ -617,10 +621,25 @@ TURN RESPONSE DIRECTIVE (MANDATORY):
             if current_user_turns >= max_user_turns - 1:
                 limit_context += " This may be the final intake turn."
 
+        completion_turn_block = ""
+        missing = missing_fields or []
+        if not missing:
+            completion_turn_block = f"""
+COMPLETION TURN (MANDATORY — this is the final intake turn):
+- All required card fields have evidence. Set is_intake_complete=true.
+- In patient_response_ru: empathic closure that weaves in 2–3 key themes from the card below
+  (problems, history, preliminary hypothesis) — natural Russian prose, not a checklist.
+- Emphasize the hypothesis is preliminary; transition to ongoing therapy.
+- Do not ask another clinical question unless there is urgent safety concern.
+
+Current card snapshot for closure (update fields per system rules, then reflect themes in patient_response_ru):
+{card_json}
+"""
+
         return f"""TURN CONTEXT — process this intake turn.
 
 ACTIVE STYLE FOR THIS RESPONSE: {active_style} (MUST embody this style's language markers from SESSION CONTEXT).
-{card_gaps_block}{directive_block}
+{card_gaps_block}{completion_turn_block}{directive_block}
 OUTPUT FORMAT:
 Return JSON ONLY with the intake schema from the system message.
 Required keys include is_intake_complete and patient_response_ru.

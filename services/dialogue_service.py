@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 
 from agents.core import IntakeAgent, TherapistAgent
 from core.config import get_settings
+from core.clinical_card_format import card_has_clinical_data, format_full_patient_summary
 from core.intake_user_copy import (
     build_intake_completion_notice,
+    build_intake_extracted_summary,
     build_intake_start_message,
     build_welcome_back_message,
 )
@@ -326,13 +328,28 @@ class DialogueService:
                     patient_text=text,
                     state=state,
                 )
-                doctor_content = result["therapist_response"]
+                therapist_closure = result["therapist_response"]
+                doctor_content = therapist_closure
+                closure_segments = None
                 if result.get("intake_completed"):
+                    extracted = build_intake_extracted_summary(
+                        result.get("card_updates") or {},
+                        address_mode=state.address_mode,
+                        initial_info_insufficient=bool(
+                            result.get("initial_info_insufficient")
+                        ),
+                        max_words=self.settings.intake_summary_max_words,
+                    )
                     notice = build_intake_completion_notice(
                         state.address_mode,
                         bool(result.get("initial_info_insufficient")),
                     )
-                    doctor_content = f"{doctor_content}\n\n{notice}".strip()
+                    closure_segments = {
+                        "therapist_closure": therapist_closure,
+                        "extracted_summary": extracted,
+                        "completion_notice": notice,
+                    }
+                    doctor_content = f"{therapist_closure}\n\n{extracted}\n\n{notice}".strip()
                 await message_repo.create_message(
                     session_id=active_session.id,
                     role="doctor",
@@ -371,6 +388,11 @@ class DialogueService:
                 return {
                     "response": doctor_content,
                     "session_ended": False,
+                    "intake_completed": bool(result.get("intake_completed")),
+                    "closure_segments": closure_segments,
+                    "initial_info_insufficient": bool(
+                        result.get("initial_info_insufficient")
+                    ),
                     "strategy": result.get("strategy", {}),
                 }
 
@@ -448,16 +470,7 @@ class DialogueService:
                     return "Карточка пока в процессе заполнения. Продолжайте отвечать в текущем диалоге."
                 return "Карточка пока не содержит данных."
 
-            has_any_data = any(
-                card.get(key, "").strip()
-                for key in (
-                    "mental_health_history",
-                    "physical_health_history",
-                    "current_problems",
-                    "intake_hypothesis",
-                    "intake_hypothesis_explanation",
-                )
-            )
+            has_any_data = card_has_clinical_data(card)
             if not has_any_data:
                 if flow_phase == "intake":
                     return "Карточка пока в процессе заполнения. Продолжайте отвечать в текущем диалоге."
@@ -467,16 +480,11 @@ class DialogueService:
             age = str(context.patient_age) if context.patient_age else "не указан"
             sex_display = sex_label(context.patient_sex)
 
-            return (
-                f"Сводка карточки пациента\n\n"
-                f"Имя/псевдоним: {display_name}\n"
-                f"Возраст: {age}\n"
-                f"Пол: {sex_display}\n\n"
-                f"История психического здоровья:\n{card.get('mental_health_history') or 'не указано'}\n\n"
-                f"История физического здоровья:\n{card.get('physical_health_history') or 'не указано'}\n\n"
-                f"Текущие проблемы и симптомы:\n{card.get('current_problems') or 'не указано'}\n\n"
-                f"Предварительная клиническая гипотеза:\n{card.get('intake_hypothesis') or 'не указано'}\n\n"
-                f"Пояснение:\n{card.get('intake_hypothesis_explanation') or 'не указано'}"
+            return format_full_patient_summary(
+                card=card,
+                display_name=display_name,
+                age=age,
+                sex_display=sex_display,
             )
 
     async def get_user_anket(self, telegram_id: int) -> str:
