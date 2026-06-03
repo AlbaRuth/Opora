@@ -1,0 +1,11 @@
+{
+  "name": "opora",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix monitoring/web",
+    "dev:web": "npm run dev --prefix monitoring/web",
+    "build:web": "npm run build --prefix monitoring/web",
+    "preview:web": "npm run preview --prefix monitoring/web",
+    "install:web": "npm install --prefix monitoring/web"
+  }
+}

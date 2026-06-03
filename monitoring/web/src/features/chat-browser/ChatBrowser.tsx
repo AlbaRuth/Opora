@@ -21,30 +21,45 @@ export function ChatBrowser({
   onRefresh,
   onSelect,
 }: Props) {
+  const sources = [
+    { value: '', label: 'All' },
+    { value: 'telegram', label: 'Telegram' },
+    { value: 'sandbox', label: 'Sandbox' },
+  ] as const;
+
   return (
     <section className="sidebar">
-      <div className="header">
-        <div>
+      <div className="sidebarHeader">
+        <div className="sidebarTitle">
           <h1>Opora Monitor</h1>
-          <small>Telegram and Sandbox separated, one trace view</small>
+          <small>Telegram and Sandbox, one trace view</small>
         </div>
-        <button onClick={onRefresh} disabled={loading}>
+        <button type="button" className="sidebarRefresh" onClick={onRefresh} disabled={loading}>
           {loading ? '...' : 'Refresh'}
         </button>
       </div>
-      <label>
-        Source
-        <select value={source} onChange={(event) => onSourceChange(event.target.value)}>
-          <option value="">All</option>
-          <option value="telegram">Telegram</option>
-          <option value="sandbox">Sandbox</option>
-        </select>
-      </label>
-      {error && <pre className="error">{error}</pre>}
+
+      <div className="sourceFilter" role="group" aria-label="Source">
+        {sources.map((item) => (
+          <button
+            key={item.value || 'all'}
+            type="button"
+            className={source === item.value ? 'sourceFilterBtn active' : 'sourceFilterBtn'}
+            aria-pressed={source === item.value}
+            onClick={() => onSourceChange(item.value)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {error && <pre className="error sidebarError">{error}</pre>}
+
       <div className="chatList">
         {chats.map((chat) => (
           <button
             key={chat.session_id}
+            type="button"
             className={selectedChat?.session_id === chat.session_id ? 'chat active' : 'chat'}
             onClick={() => onSelect(chat)}
           >
@@ -53,7 +68,7 @@ export function ChatBrowser({
             <small>{chat.dialog_count} turns / {chat.therapy_type}</small>
           </button>
         ))}
-        {!loading && chats.length === 0 && <p className="muted">No chats yet.</p>}
+        {!loading && chats.length === 0 && <p className="muted chatListEmpty">No chats yet.</p>}
       </div>
     </section>
   );

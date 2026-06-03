@@ -2,42 +2,45 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api } from './api';
 import { ChatBrowser } from './features/chat-browser/ChatBrowser';
-import { DialogPanel } from './features/dialog/DialogPanel';
+import { ConversationPanel } from './features/conversation/ConversationPanel';
 import { SandboxConsole } from './features/sandbox-console/SandboxConsole';
-import { TraceExplorer } from './features/trace-explorer/TraceExplorer';
 import './styles.css';
 import type {
   ChatSummary,
+  ClinicalCardResponse,
   EffectiveModelConfig,
   GenerationConfig,
   MessageItem,
   ModelOverrides,
-  PatientTemplate,
   SandboxBatchResponse,
   SandboxPrescreeningProfile,
+  SandboxJudgeResult,
   SandboxSessionResponse,
   SandboxTurnResponse,
   TraceDetail,
   TraceSummary,
 } from './types';
 
+type WorkspaceTab = 'conversation' | 'sandbox';
+
 function App() {
   const [source, setSource] = useState<string>('');
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('conversation');
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [selectedChat, setSelectedChat] = useState<ChatSummary | null>(null);
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [traceDetail, setTraceDetail] = useState<TraceDetail | null>(null);
-  const [templates, setTemplates] = useState<PatientTemplate[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<number | undefined>();
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [sandboxStartPhase, setSandboxStartPhase] = useState<'prescreening' | 'intake' | 'therapy'>('intake');
-  const [prescreeningMode, setPrescreeningMode] = useState<'manual' | 'ai_generated'>('manual');
+  const [prescreeningMode, setPrescreeningMode] = useState<'manual' | 'ai_generated'>('ai_generated');
   const [aiPrescreeningSeed, setAiPrescreeningSeed] = useState('');
   const [scenarioSeed, setScenarioSeed] = useState('');
   const [autoRunTurns, setAutoRunTurns] = useState(3);
   const [batchCount, setBatchCount] = useState(20);
   const [batchParallelism, setBatchParallelism] = useState(5);
   const [sandboxBatch, setSandboxBatch] = useState<SandboxBatchResponse | null>(null);
+  const [sandboxBatchRuns, setSandboxBatchRuns] = useState<SandboxSessionResponse[]>([]);
   const [manualProfile, setManualProfile] = useState<SandboxPrescreeningProfile>({
     patient_name: 'Sandbox Patient',
     patient_age: 32,
@@ -57,6 +60,8 @@ function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [traceLoading, setTraceLoading] = useState(false);
+  const [clinicalCard, setClinicalCard] = useState<ClinicalCardResponse | null>(null);
+  const [clinicalCardLoading, setClinicalCardLoading] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
 
   async function loadChats(nextSource = source) {
@@ -71,10 +76,28 @@ function App() {
     }
   }
 
-  async function selectChat(chat: ChatSummary) {
+  async function loadClinicalCard(sessionId: number) {
+    setClinicalCardLoading(true);
+    try {
+      setClinicalCard(await api.clinicalCard(sessionId));
+    } catch {
+      setClinicalCard(null);
+    } finally {
+      setClinicalCardLoading(false);
+    }
+  }
+
+  async function refreshSandboxSession(runId: number) {
+    const updated = await api.getSandboxSession(runId);
+    setSandbox(updated);
+    setSandboxBatchRuns((runs) =>
+      runs.map((run) => (run.run_id === updated.run_id ? updated : run)),
+    );
+    return updated;
+  }
+
+  async function loadChatWorkspace(chat: ChatSummary) {
     setWorkspaceLoading(true);
-    setSelectedChat(chat);
-    setTraceDetail(null);
     setError(null);
     try {
       const [nextMessages, nextTraces] = await Promise.all([
@@ -83,6 +106,20 @@ function App() {
       ]);
       setMessages(nextMessages);
       setTraces(nextTraces);
+      if (chat.source === 'sandbox') {
+        const runId = nextTraces.find((trace) => trace.sandbox_run_id)?.sandbox_run_id;
+        if (runId) {
+          setSandboxTurns(await api.sandboxTurns(runId));
+          try {
+            setSandbox(await api.getSandboxSession(runId));
+          } catch {
+            /* session metadata optional when browsing history */
+          }
+        } else {
+          setSandboxTurns([]);
+        }
+      }
+      await loadClinicalCard(chat.session_id);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -90,11 +127,44 @@ function App() {
     }
   }
 
-  async function selectTrace(trace: TraceSummary) {
+  async function openLatestDoctorTrace(sessionId: number) {
+    const nextMessages = await api.messages(sessionId);
+    const latestDoctorTrace = [...nextMessages]
+      .reverse()
+      .find((message) => message.role === 'doctor' && message.trace_id);
+    if (latestDoctorTrace?.trace_id) {
+      await openTrace(latestDoctorTrace.trace_id);
+    }
+  }
+
+  async function selectChat(chat: ChatSummary) {
+    setWorkspaceTab('conversation');
+    setSelectedChat(chat);
+    setTraceDetail(null);
+    setSelectedTraceId(null);
+    setTraces([]);
+    await loadChatWorkspace(chat);
+  }
+
+  async function focusSession(sessionId: number, nextSource = 'sandbox') {
+    setSource(nextSource);
+    await loadChats(nextSource);
+    const chat = await api.chat(sessionId);
+    await selectChat(chat);
+  }
+
+  async function refreshSelectedChat() {
+    if (!selectedChat) return;
+    await loadChatWorkspace(selectedChat);
+  }
+
+  async function openTrace(traceId: string) {
+    setWorkspaceTab('conversation');
+    setSelectedTraceId(traceId);
     setTraceLoading(true);
     setError(null);
     try {
-      setTraceDetail(await api.traceDetail(trace.trace_id));
+      setTraceDetail(await api.traceDetail(traceId));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -108,7 +178,6 @@ function App() {
     try {
       const created = await api.createSandbox({
         name: 'UI sandbox run',
-        patient_template_id: selectedTemplateId ?? templates[0]?.id,
         start_phase: sandboxStartPhase,
         prescreening_mode: prescreeningMode,
         manual_prescreening_profile: prescreeningMode === 'manual' ? manualProfile : undefined,
@@ -119,8 +188,7 @@ function App() {
       });
       setSandbox(created);
       setSandboxTurns([]);
-      setSource('sandbox');
-      await loadChats('sandbox');
+      await focusSession(created.session_id, 'sandbox');
     } catch (err) {
       setError(String(err));
     } finally {
@@ -141,6 +209,14 @@ function App() {
       setSandboxMessage('');
       setSandboxTurns((items) => [...items, turn]);
       await loadChats('sandbox');
+      if (selectedChat?.session_id === sandbox.session_id) {
+        await refreshSelectedChat();
+      } else {
+        await focusSession(sandbox.session_id, 'sandbox');
+      }
+      if (turn.trace_id) {
+        await openTrace(turn.trace_id);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -155,7 +231,18 @@ function App() {
     try {
       const turns = await api.autoRun(sandbox.run_id, autoRunTurns, currentOverrides());
       setSandboxTurns((items) => [...items, ...turns]);
+      await refreshSandboxSession(sandbox.run_id);
+      await loadClinicalCard(sandbox.session_id);
       await loadChats('sandbox');
+      if (selectedChat?.session_id === sandbox.session_id) {
+        await refreshSelectedChat();
+      } else {
+        await focusSession(sandbox.session_id, 'sandbox');
+      }
+      const lastTrace = [...turns].reverse().find((turn) => turn.trace_id)?.trace_id;
+      if (lastTrace) {
+        await openTrace(lastTrace);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -180,12 +267,16 @@ function App() {
       });
       setSandboxBatch(batch);
       const runs = await api.sandboxBatchRuns(batch.batch_id);
+      setSandboxBatchRuns(runs);
       if (runs[0]) {
         setSandbox(runs[0]);
         setSandboxTurns(await api.sandboxTurns(runs[0].run_id));
+        await focusSession(runs[0].session_id, 'sandbox');
+        await openLatestDoctorTrace(runs[0].session_id);
+      } else {
+        setSource('sandbox');
+        await loadChats('sandbox');
       }
-      setSource('sandbox');
-      await loadChats('sandbox');
     } catch (err) {
       setError(String(err));
     } finally {
@@ -216,6 +307,40 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  async function runJudge() {
+    if (!sandbox) return;
+    setSandboxBusy(true);
+    setError(null);
+    try {
+      const updated = await api.judgeSandbox(sandbox.run_id);
+      setSandbox(updated);
+      setSandboxBatchRuns((runs) =>
+        runs.map((run) => (run.run_id === updated.run_id ? updated : run)),
+      );
+      if (selectedChat?.session_id === updated.session_id) {
+        await refreshSelectedChat();
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  }
+
+  async function selectBatchRun(run: SandboxSessionResponse) {
+    setSandbox(run);
+    setSandboxBusy(true);
+    setError(null);
+    try {
+      setSandboxTurns(await api.sandboxTurns(run.run_id));
+      await focusSession(run.session_id, 'sandbox');
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  }
+
   async function stopSandbox() {
     if (!sandbox) return;
     setSandboxBusy(true);
@@ -235,6 +360,7 @@ function App() {
     setError(null);
     try {
       setSandboxTurns(await api.sandboxTurns(sandbox.run_id));
+      await refreshSelectedChat();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -268,12 +394,6 @@ function App() {
 
   useEffect(() => {
     loadChats();
-    api.templates()
-      .then((items) => {
-        setTemplates(items);
-        setSelectedTemplateId(items[0]?.id);
-      })
-      .catch((err) => setError(String(err)));
     api.modelConfig()
       .then((config) => {
         setModelConfig(config);
@@ -298,56 +418,94 @@ function App() {
         onRefresh={() => loadChats()}
         onSelect={selectChat}
       />
-      <section className="content">
-        <DialogPanel selectedChat={selectedChat} messages={messages} loading={workspaceLoading} />
-        <TraceExplorer
-          traces={traces}
-          traceDetail={traceDetail}
-          loading={traceLoading}
-          onSelectTrace={selectTrace}
-        />
-        <SandboxConsole
-          templates={templates}
-          selectedTemplateId={selectedTemplateId}
-          startPhase={sandboxStartPhase}
-          prescreeningMode={prescreeningMode}
-          manualProfile={manualProfile}
-          aiPrescreeningSeed={aiPrescreeningSeed}
-          scenarioSeed={scenarioSeed}
-          autoRunTurns={autoRunTurns}
-          batchCount={batchCount}
-          batchParallelism={batchParallelism}
-          sandboxBatch={sandboxBatch}
-          sandbox={sandbox}
-          sandboxMessage={sandboxMessage}
-          sandboxTurns={sandboxTurns}
-          busy={sandboxBusy}
-          modelConfig={modelConfig}
-          selectedModelTask={selectedModelTask}
-          draftModelConfig={draftModelConfig}
-          onTemplateChange={setSelectedTemplateId}
-          onStartPhaseChange={setSandboxStartPhase}
-          onPrescreeningModeChange={setPrescreeningMode}
-          onManualProfileChange={setManualProfile}
-          onAiPrescreeningSeedChange={setAiPrescreeningSeed}
-          onScenarioSeedChange={setScenarioSeed}
-          onAutoRunTurnsChange={setAutoRunTurns}
-          onBatchCountChange={setBatchCount}
-          onBatchParallelismChange={setBatchParallelism}
-          onMessageChange={setSandboxMessage}
-          onCreate={createSandbox}
-          onCreateBatch={createSandboxBatch}
-          onSend={sendSandbox}
-          onAutoRun={runAutoPatient}
-          onStop={stopSandbox}
-          onRefreshTurns={refreshSandboxTurns}
-          onExportRun={exportCurrentRun}
-          onExportBatch={exportCurrentBatch}
-          onOpenTrace={selectTrace}
-          onModelTaskChange={changeModelTask}
-          onDraftModelChange={setDraftModelConfig}
-          onResetModel={() => resetDraftFromDefaults()}
-        />
+      <section className="workspace">
+        <nav className="workspaceTabs" aria-label="Workspace">
+          <button
+            type="button"
+            className={workspaceTab === 'conversation' ? 'workspaceTab active' : 'workspaceTab'}
+            aria-selected={workspaceTab === 'conversation'}
+            onClick={() => setWorkspaceTab('conversation')}
+          >
+            Conversation
+          </button>
+          <button
+            type="button"
+            className={workspaceTab === 'sandbox' ? 'workspaceTab active' : 'workspaceTab'}
+            aria-selected={workspaceTab === 'sandbox'}
+            onClick={() => setWorkspaceTab('sandbox')}
+          >
+            Sandbox
+          </button>
+        </nav>
+        <div className="workspaceBody">
+          {workspaceTab === 'conversation' && (
+            <ConversationPanel
+              selectedChat={selectedChat}
+              messages={messages}
+              traces={traces}
+              sandboxTurns={sandboxTurns}
+              traceDetail={traceDetail}
+              selectedTraceId={selectedTraceId}
+              clinicalCard={clinicalCard}
+              clinicalCardLoading={clinicalCardLoading}
+              loading={workspaceLoading}
+              traceLoading={traceLoading}
+              judgeResult={(sandbox?.judge_result ?? null) as SandboxJudgeResult | null}
+              judgeBusy={sandboxBusy}
+              onOpenTrace={openTrace}
+              onCloseTrace={() => {
+                setTraceDetail(null);
+                setSelectedTraceId(null);
+              }}
+              onRunJudge={sandbox ? runJudge : undefined}
+              onOpenJudgeReport={() => setWorkspaceTab('sandbox')}
+            />
+          )}
+          {workspaceTab === 'sandbox' && (
+            <SandboxConsole
+              startPhase={sandboxStartPhase}
+              prescreeningMode={prescreeningMode}
+              manualProfile={manualProfile}
+              aiPrescreeningSeed={aiPrescreeningSeed}
+              scenarioSeed={scenarioSeed}
+              autoRunTurns={autoRunTurns}
+              batchCount={batchCount}
+              batchParallelism={batchParallelism}
+              sandboxBatch={sandboxBatch}
+              sandboxBatchRuns={sandboxBatchRuns}
+              sandbox={sandbox}
+              sandboxMessage={sandboxMessage}
+              sandboxTurns={sandboxTurns}
+              busy={sandboxBusy}
+              modelConfig={modelConfig}
+              selectedModelTask={selectedModelTask}
+              draftModelConfig={draftModelConfig}
+              onStartPhaseChange={setSandboxStartPhase}
+              onPrescreeningModeChange={setPrescreeningMode}
+              onManualProfileChange={setManualProfile}
+              onAiPrescreeningSeedChange={setAiPrescreeningSeed}
+              onScenarioSeedChange={setScenarioSeed}
+              onAutoRunTurnsChange={setAutoRunTurns}
+              onBatchCountChange={setBatchCount}
+              onBatchParallelismChange={setBatchParallelism}
+              onMessageChange={setSandboxMessage}
+              onCreate={createSandbox}
+              onCreateBatch={createSandboxBatch}
+              onSend={sendSandbox}
+              onAutoRun={runAutoPatient}
+              onStop={stopSandbox}
+              onRefreshTurns={refreshSandboxTurns}
+              onExportRun={exportCurrentRun}
+              onExportBatch={exportCurrentBatch}
+              onOpenTrace={(trace) => openTrace(trace.trace_id)}
+              onRunJudge={runJudge}
+              onSelectBatchRun={selectBatchRun}
+              onModelTaskChange={changeModelTask}
+              onDraftModelChange={setDraftModelConfig}
+              onResetModel={() => resetDraftFromDefaults()}
+            />
+          )}
+        </div>
       </section>
     </main>
   );

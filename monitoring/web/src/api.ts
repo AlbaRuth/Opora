@@ -1,5 +1,6 @@
 import type {
   ChatSummary,
+  ClinicalCardResponse,
   EffectiveModelConfig,
   MessageItem,
   ModelOverrides,
@@ -46,7 +47,10 @@ async function requestText(path: string): Promise<string> {
 export const api = {
   chats: (source?: string) =>
     request<ChatSummary[]>(`/api/chats${source ? `?source=${source}` : ''}`),
+  chat: (sessionId: number) => request<ChatSummary>(`/api/chats/${sessionId}`),
   messages: (sessionId: number) => request<MessageItem[]>(`/api/chats/${sessionId}/messages`),
+  clinicalCard: (sessionId: number) =>
+    request<ClinicalCardResponse>(`/api/chats/${sessionId}/clinical-card`),
   traces: (sessionId: number) => request<TraceSummary[]>(`/api/chats/${sessionId}/traces`),
   traceDetail: (traceId: string) => request<TraceDetail>(`/api/traces/${traceId}`),
   exportChat: (sessionId: number, format: 'json' | 'md') =>
@@ -76,6 +80,12 @@ export const api = {
     request<SandboxSessionResponse>(`/api/sandbox/sessions/${runId}/stop`, {
       method: 'POST',
     }),
+  judgeSandbox: (runId: number) =>
+    request<SandboxSessionResponse>(`/api/sandbox/sessions/${runId}/judge`, {
+      method: 'POST',
+    }),
+  getSandboxSession: (runId: number) =>
+    request<SandboxSessionResponse>(`/api/sandbox/sessions/${runId}`),
   createSandboxBatch: (payload: SandboxBatchCreatePayload) =>
     request<SandboxBatchResponse>('/api/sandbox/batches', {
       method: 'POST',

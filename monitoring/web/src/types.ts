@@ -15,10 +15,12 @@ export type ChatSummary = {
 
 export type MessageItem = {
   id: number;
+  session_id: number;
   role: 'patient' | 'doctor';
   content: string;
   message_number: number;
   channel: 'telegram' | 'sandbox';
+  trace_id?: string | null;
   primary_emotion?: string | null;
   emotional_intensity?: number | null;
   created_at: string;
@@ -142,6 +144,14 @@ export type SandboxTurnResponse = {
   assistant_message: string;
   latency_ms?: number | null;
   metadata?: Record<string, unknown> | null;
+  stop_reason?: string | null;
+  patient_trace_id?: string | null;
+  intake_completed?: boolean;
+  closure_segments?: {
+    therapist_closure?: string;
+    extracted_summary?: string;
+    completion_notice?: string;
+  } | null;
 };
 
 export type SandboxBatchCreatePayload = {
@@ -169,6 +179,53 @@ export type SandboxBatchResponse = {
   started_at?: string | null;
   finished_at?: string | null;
   stop_reason?: string | null;
+};
+
+export type ClinicalCardResponse = {
+  session_id: number;
+  account_id: number;
+  display_name?: string | null;
+  age?: string | null;
+  sex_display?: string | null;
+  has_data: boolean;
+  initial_info_insufficient: boolean;
+  fields: Record<string, string>;
+  summary_text?: string | null;
+};
+
+export type SandboxJudgeQualitySection = {
+  score?: number;
+  findings?: string[];
+  good_examples?: string[];
+  bad_examples?: string[];
+};
+
+export type SandboxJudgeExtractionQuality = {
+  score?: number;
+  findings?: string[];
+  missing_in_card?: string[];
+  hallucinated_in_card?: string[];
+};
+
+export type SandboxJudgeBottleneck = {
+  turn_number?: number;
+  component?: string;
+  issue?: string;
+  evidence?: string;
+  severity?: 'low' | 'medium' | 'high';
+};
+
+export type SandboxJudgeResult = {
+  overall_score?: number;
+  overall_verdict?: 'pass' | 'needs_review' | 'fail';
+  therapist_quality?: SandboxJudgeQualitySection;
+  extraction_quality?: SandboxJudgeExtractionQuality;
+  contextuality?: { score?: number; findings?: string[] };
+  psychologist_liveness?: { score?: number; findings?: string[] };
+  architecture_bottlenecks?: SandboxJudgeBottleneck[];
+  latency_notes?: string[];
+  diversity_notes?: string[];
+  recommended_fixes?: string[];
 };
 
 export type PatientTemplate = {

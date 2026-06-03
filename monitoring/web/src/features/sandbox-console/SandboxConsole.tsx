@@ -1,18 +1,17 @@
 import type {
   EffectiveModelConfig,
   GenerationConfig,
-  PatientTemplate,
   SandboxBatchResponse,
   SandboxPrescreeningProfile,
   SandboxSessionResponse,
   SandboxTurnResponse,
   TraceSummary,
 } from '../../types';
+import { SelectField } from '../../components/SelectField';
 import { ModelSettings } from '../model-settings/ModelSettings';
+import { JudgeReportPanel } from './JudgeReportPanel';
 
 type Props = {
-  templates: PatientTemplate[];
-  selectedTemplateId?: number;
   startPhase: 'prescreening' | 'intake' | 'therapy';
   prescreeningMode: 'manual' | 'ai_generated';
   manualProfile: SandboxPrescreeningProfile;
@@ -22,6 +21,7 @@ type Props = {
   batchCount: number;
   batchParallelism: number;
   sandboxBatch: SandboxBatchResponse | null;
+  sandboxBatchRuns: SandboxSessionResponse[];
   sandbox: SandboxSessionResponse | null;
   sandboxMessage: string;
   sandboxTurns: SandboxTurnResponse[];
@@ -29,7 +29,6 @@ type Props = {
   modelConfig: EffectiveModelConfig | null;
   selectedModelTask: string;
   draftModelConfig: GenerationConfig | null;
-  onTemplateChange: (id: number) => void;
   onStartPhaseChange: (phase: 'prescreening' | 'intake' | 'therapy') => void;
   onPrescreeningModeChange: (mode: 'manual' | 'ai_generated') => void;
   onManualProfileChange: (profile: SandboxPrescreeningProfile) => void;
@@ -48,14 +47,14 @@ type Props = {
   onExportRun: (format: 'json' | 'md') => void;
   onExportBatch: (format: 'json' | 'md') => void;
   onOpenTrace: (trace: TraceSummary) => void;
+  onRunJudge: () => void;
+  onSelectBatchRun: (run: SandboxSessionResponse) => void;
   onModelTaskChange: (task: string) => void;
   onDraftModelChange: (config: GenerationConfig) => void;
   onResetModel: () => void;
 };
 
 export function SandboxConsole({
-  templates,
-  selectedTemplateId,
   startPhase,
   prescreeningMode,
   manualProfile,
@@ -65,6 +64,7 @@ export function SandboxConsole({
   batchCount,
   batchParallelism,
   sandboxBatch,
+  sandboxBatchRuns,
   sandbox,
   sandboxMessage,
   sandboxTurns,
@@ -72,7 +72,6 @@ export function SandboxConsole({
   modelConfig,
   selectedModelTask,
   draftModelConfig,
-  onTemplateChange,
   onStartPhaseChange,
   onPrescreeningModeChange,
   onManualProfileChange,
@@ -91,11 +90,12 @@ export function SandboxConsole({
   onExportRun,
   onExportBatch,
   onOpenTrace,
+  onRunJudge,
+  onSelectBatchRun,
   onModelTaskChange,
   onDraftModelChange,
   onResetModel,
 }: Props) {
-  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const completedBatchRuns = sandboxBatch?.created_runs ?? 0;
   const requestedBatchRuns = sandboxBatch?.requested_count ?? batchCount;
   const batchProgress = requestedBatchRuns > 0 ? Math.min(100, Math.round((completedBatchRuns / requestedBatchRuns) * 100)) : 0;
@@ -137,25 +137,35 @@ export function SandboxConsole({
             <span className="sectionIndex">01</span>
             <div>
               <h3>Run Setup</h3>
-              <small>Profile, phase, and generation seeds</small>
+              <small>AI-generated patient profile, scenario, and optional seeds</small>
             </div>
           </div>
 
           <div className="settingsGrid compact">
             <label>
               Start phase
-              <select value={startPhase} onChange={(event) => onStartPhaseChange(event.target.value as 'prescreening' | 'intake' | 'therapy')}>
-                <option value="prescreening">Prescreening</option>
-                <option value="intake">Intake</option>
-                <option value="therapy">Therapy</option>
-              </select>
+              <SelectField
+                aria-label="Start phase"
+                value={startPhase}
+                onChange={(value) => onStartPhaseChange(value as 'prescreening' | 'intake' | 'therapy')}
+                options={[
+                  { value: 'prescreening', label: 'Prescreening' },
+                  { value: 'intake', label: 'Intake' },
+                  { value: 'therapy', label: 'Therapy' },
+                ]}
+              />
             </label>
             <label>
               Prescreening data
-              <select value={prescreeningMode} onChange={(event) => onPrescreeningModeChange(event.target.value as 'manual' | 'ai_generated')}>
-                <option value="manual">Manual</option>
-                <option value="ai_generated">AI generated</option>
-              </select>
+              <SelectField
+                aria-label="Prescreening data"
+                value={prescreeningMode}
+                onChange={(value) => onPrescreeningModeChange(value as 'manual' | 'ai_generated')}
+                options={[
+                  { value: 'ai_generated', label: 'AI generated (random)' },
+                  { value: 'manual', label: 'Manual override' },
+                ]}
+              />
             </label>
             <label>
               Auto turns
@@ -183,18 +193,34 @@ export function SandboxConsole({
               </label>
               <label>
                 Patient sex
-                <select value={manualProfile.patient_sex} onChange={(event) => onManualProfileChange({ ...manualProfile, patient_sex: event.target.value as SandboxPrescreeningProfile['patient_sex'] })}>
-                  <option value="prefer_not_to_say">Prefer not to say</option>
-                  <option value="female">Female</option>
-                  <option value="male">Male</option>
-                </select>
+                <SelectField
+                  aria-label="Patient sex"
+                  value={manualProfile.patient_sex}
+                  onChange={(value) => onManualProfileChange({
+                    ...manualProfile,
+                    patient_sex: value as SandboxPrescreeningProfile['patient_sex'],
+                  })}
+                  options={[
+                    { value: 'prefer_not_to_say', label: 'Prefer not to say' },
+                    { value: 'female', label: 'Female' },
+                    { value: 'male', label: 'Male' },
+                  ]}
+                />
               </label>
               <label>
                 Address
-                <select value={manualProfile.address_mode} onChange={(event) => onManualProfileChange({ ...manualProfile, address_mode: event.target.value as SandboxPrescreeningProfile['address_mode'] })}>
-                  <option value="formal">Formal</option>
-                  <option value="informal">Informal</option>
-                </select>
+                <SelectField
+                  aria-label="Address mode"
+                  value={manualProfile.address_mode}
+                  onChange={(value) => onManualProfileChange({
+                    ...manualProfile,
+                    address_mode: value as SandboxPrescreeningProfile['address_mode'],
+                  })}
+                  options={[
+                    { value: 'formal', label: 'Formal' },
+                    { value: 'informal', label: 'Informal' },
+                  ]}
+                />
               </label>
               <label>
                 Therapist name
@@ -202,44 +228,43 @@ export function SandboxConsole({
               </label>
               <label>
                 Therapist gender
-                <select value={manualProfile.therapist_gender} onChange={(event) => onManualProfileChange({ ...manualProfile, therapist_gender: event.target.value as SandboxPrescreeningProfile['therapist_gender'] })}>
-                  <option value="female">Female</option>
-                  <option value="male">Male</option>
-                </select>
+                <SelectField
+                  aria-label="Therapist gender"
+                  value={manualProfile.therapist_gender}
+                  onChange={(value) => onManualProfileChange({
+                    ...manualProfile,
+                    therapist_gender: value as SandboxPrescreeningProfile['therapist_gender'],
+                  })}
+                  options={[
+                    { value: 'female', label: 'Female' },
+                    { value: 'male', label: 'Male' },
+                  ]}
+                />
               </label>
             </div>
           ) : (
             <label>
               AI prescreening seed
-              <textarea value={aiPrescreeningSeed} onChange={(event) => onAiPrescreeningSeedChange(event.target.value)} placeholder="Optional seed to make the generated patient reproducible" />
+              <textarea
+                value={aiPrescreeningSeed}
+                onChange={(event) => onAiPrescreeningSeedChange(event.target.value)}
+                placeholder="Optional. Leave empty for a fully random Russian-speaking patient each run."
+              />
             </label>
           )}
 
           <label>
             Scenario seed
-            <textarea value={scenarioSeed} onChange={(event) => onScenarioSeedChange(event.target.value)} placeholder="Optional scenario seed for symptoms, tone, and background" />
+            <textarea
+              value={scenarioSeed}
+              onChange={(event) => onScenarioSeedChange(event.target.value)}
+              placeholder="Optional direction for symptoms and backstory. Empty = model picks a fresh archetype."
+            />
           </label>
 
-          <label>
-            Patient template
-            <select value={selectedTemplateId ?? ''} onChange={(event) => onTemplateChange(Number(event.target.value))}>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name} v{template.version}
-                </option>
-              ))}
-            </select>
-          </label>
-          {selectedTemplate && (
-            <article className="templatePreview">
-              <div>
-                <strong>{selectedTemplate.name}</strong>
-                <span className="badge">v{selectedTemplate.version}</span>
-              </div>
-              <p>{selectedTemplate.presenting_problem}</p>
-              {selectedTemplate.persona && <small>{selectedTemplate.persona}</small>}
-            </article>
-          )}
+          <p className="muted">
+            Patient template is not used. Profile, archetype, and scenario are generated automatically for every run.
+          </p>
         </section>
 
         <section className="surface modelSurface">
@@ -351,6 +376,14 @@ export function SandboxConsole({
           ))}
         </div>
       </section>
+
+      <JudgeReportPanel
+        sandbox={sandbox}
+        batchRuns={sandboxBatchRuns}
+        busy={busy}
+        onRunJudge={onRunJudge}
+        onSelectRun={onSelectBatchRun}
+      />
     </section>
   );
 }

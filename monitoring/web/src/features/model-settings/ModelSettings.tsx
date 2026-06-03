@@ -1,4 +1,5 @@
 import type { EffectiveModelConfig, GenerationConfig } from '../../types';
+import { SelectField } from '../../components/SelectField';
 
 type Props = {
   modelConfig: EffectiveModelConfig | null;
@@ -22,15 +23,19 @@ export function ModelSettings({
       <h3>Model Settings</h3>
       <label>
         Agent task
-        <select value={selectedModelTask} onChange={(event) => onTaskChange(event.target.value)}>
-          {modelConfig && Object.entries(modelConfig.agents).flatMap(([agent, tasks]) =>
-            Object.keys(tasks).map((task) => (
-              <option key={`${agent}.${task}`} value={`${agent}.${task}`}>
-                {agent}.{task}
-              </option>
-            )),
-          )}
-        </select>
+        <SelectField
+          aria-label="Agent task"
+          value={selectedModelTask}
+          onChange={onTaskChange}
+          options={modelConfig
+            ? Object.entries(modelConfig.agents).flatMap(([agent, tasks]) =>
+              Object.keys(tasks).map((task) => ({
+                value: `${agent}.${task}`,
+                label: `${agent}.${task}`,
+              })),
+            )
+            : []}
+        />
       </label>
       {draftModelConfig && (
         <div className="settingsGrid">
