@@ -53,8 +53,6 @@ class DialogueService:
         first_name: str | None = None,
         last_name: str | None = None,
         language_code: str | None = None,
-        channel: str = "telegram",
-        source: str = "bot",
     ) -> str | None:
         """Start new session with an end-to-end observability trace."""
         if get_current_trace():
@@ -66,7 +64,7 @@ class DialogueService:
                 language_code=language_code,
             )
 
-        trace = TraceContext(channel=channel, source=source)
+        trace = TraceContext(channel="telegram", source="telegram_start")
         started = time.perf_counter()
         status = "success"
         error_message: str | None = None
@@ -216,14 +214,12 @@ class DialogueService:
         self,
         telegram_id: int,
         text: str,
-        channel: str = "telegram",
-        source: str = "bot",
     ) -> dict:
         """Process user message with an end-to-end observability trace."""
         if get_current_trace():
             return await self._process_message_core(telegram_id=telegram_id, text=text)
 
-        trace = TraceContext(channel=channel, source=source)
+        trace = TraceContext(channel="telegram", source="telegram_message")
         started = time.perf_counter()
         status = "success"
         error_message: str | None = None

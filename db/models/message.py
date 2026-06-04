@@ -32,7 +32,6 @@ class Message(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     message_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
     trace_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
-    channel: Mapped[str] = mapped_column(String(50), nullable=False, default="telegram", index=True)
 
     # Optional emotional analysis (cached)
     primary_emotion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

@@ -11,7 +11,13 @@ from aiogram import F, types
 from core.config import get_settings
 from core.intake_user_copy import build_intake_start_message, build_welcome_back_message
 from core.logging import LogContexts, get_logger
-from core.profile_labels import DEFAULT_THERAPIST_GENDER, DEFAULT_THERAPIST_NAME, THERAPIST_STYLES
+from core.profile_labels import (
+    DEFAULT_THERAPIST_GENDER,
+    DEFAULT_THERAPIST_NAME,
+    THERAPIST_STYLES,
+    address_mode_label,
+    sex_label,
+)
 from db.repositories import (
     AccountRepository,
     ClinicalProfileRepository,
@@ -92,9 +98,9 @@ async def start_prescreening(message: types.Message) -> None:
     set_prescreening_state(telegram_id, PrescreeningState(account_id=account.id))
 
     await message.answer(
-        "?? ????? ??????????! ??????? ???????? ?????? ?????????.\n\n"
-        "<b>??? ?? ?????? ?? ??? ???????????</b>\n"
-        f"(?? ?????????: {DEFAULT_THERAPIST_NAME})",
+        "👋 Добро пожаловать! Давайте настроим вашего психолога.\n\n"
+        "<b>Как вы хотите ко мне обращаться?</b>\n"
+        f"(по умолчанию: {DEFAULT_THERAPIST_NAME})",
         reply_markup=build_skip_keyboard(),
     )
 
@@ -116,7 +122,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
                 compat_state.therapist_name = text[:50]
             compat_state.step = "awaiting_therapist_gender"
             await message.answer(
-                "<b>???????? ??? ?????????:</b>\n(?? ?????????: ???????)",
+                "<b>Выберите пол психолога:</b>\n(по умолчанию: Женский)",
                 reply_markup=build_gender_keyboard(),
             )
             return True
@@ -126,7 +132,9 @@ async def handle_prescreening_text(message: types.Message) -> bool:
                 return True
             compat_state.patient_name = text[:100]
             compat_state.step = "awaiting_patient_age"
-            await message.answer("<b>??????? ??? ????</b>\n(??????? ?????, ????????: 25)")
+            await message.answer(
+                "<b>Сколько вам лет?</b>\n(укажите число, например: 25)"
+            )
             return True
         if compat_state.step == "awaiting_patient_age":
             try:
@@ -136,7 +144,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
                 compat_state.patient_age = age
                 compat_state.step = "awaiting_patient_sex"
                 await message.answer(
-                    "<b>??? ???:</b>\n(??? ??????? ??? ????? ???????? ???)",
+                    "<b>Ваш пол:</b>\n(это поможет мне лучше понимать вас)",
                     reply_markup=build_patient_sex_keyboard(),
                 )
                 return True
@@ -149,7 +157,7 @@ async def handle_prescreening_text(message: types.Message) -> bool:
         return False
 
     if state.step == "processing_completion":
-        await message.answer("? ?????????, ???????? ????????? ???????")
+        await message.answer("⏳ Подождите, завершаю настройку профиля")
         return True
 
     if state.step == "awaiting_therapist_name":
@@ -165,7 +173,9 @@ async def handle_prescreening_text(message: types.Message) -> bool:
         state.patient_name = text[:100]
         state.step = "awaiting_patient_age"
         await save_wizard_state(state)
-        await message.answer("<b>??????? ??? ????</b>\n(??????? ?????, ????????: 25)")
+        await message.answer(
+            "<b>Сколько вам лет?</b>\n(укажите число, например: 25)"
+        )
         return True
 
     if state.step == "awaiting_patient_age":
@@ -187,7 +197,7 @@ async def _ask_gender(message: types.Message, state: PrescreeningWizardState) ->
     state.step = "awaiting_therapist_gender"
     await save_wizard_state(state)
     await message.answer(
-        "<b>???????? ??? ?????????:</b>\n(?? ?????????: ???????)",
+        "<b>Выберите пол психолога:</b>\n(по умолчанию: Женский)",
         reply_markup=build_gender_keyboard(),
     )
 
@@ -195,14 +205,16 @@ async def _ask_gender(message: types.Message, state: PrescreeningWizardState) ->
 async def _ask_patient_name(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_patient_name"
     await save_wizard_state(state)
-    await message.answer("<b>??? ??? ? ??? ???????????</b>\n(??????? ???? ??? ??? ?????????)")
+    await message.answer(
+        "<b>Как мне к вам обращаться?</b>\n(введите ваше имя или псевдоним)"
+    )
 
 
 async def _ask_patient_sex(message: types.Message, state: PrescreeningWizardState) -> None:
     state.step = "awaiting_patient_sex"
     await save_wizard_state(state)
     await message.answer(
-        "<b>??? ???:</b>\n(??? ??????? ??? ????? ???????? ???)",
+        "<b>Ваш пол:</b>\n(это поможет мне лучше понимать вас)",
         reply_markup=build_patient_sex_keyboard(),
     )
 
@@ -211,7 +223,8 @@ async def _ask_address_mode(message: types.Message, state: PrescreeningWizardSta
     state.step = "awaiting_address_mode"
     await save_wizard_state(state)
     await message.answer(
-        "<b>??? ??? ? ??? ???????????</b>\n???????? ??????? ??? ??? ????? ???????:",
+        "<b>Как мне к вам обращаться?</b>\n"
+        "Выберите удобный для вас стиль общения:",
         reply_markup=build_address_mode_keyboard(),
     )
 
@@ -220,7 +233,8 @@ async def _ask_styles(message: types.Message, state: PrescreeningWizardState) ->
     state.step = "awaiting_styles_selection"
     await save_wizard_state(state)
     await message.answer(
-        "<b>???????? ????? ??????? ?????????:</b>\n(????? ??????? ????????? ??? ????????????? ????????????)",
+        "<b>Выберите стиль общения психолога:</b>\n"
+        "(можно выбрать несколько для динамического переключения)",
         reply_markup=build_styles_keyboard(state.selected_styles),
     )
 
@@ -245,7 +259,7 @@ async def _complete_prescreening(
         account = await account_repo.get_by_telegram_id(user_id)
         if not account:
             logger.error("account_not_found_for_prescreening", telegram_id=user_id)
-            await message.answer("?????? ?????????? ??????. ??????? /start")
+            await message.answer("Ошибка: пользователь не найден. Нажмите /start")
             return
 
         therapist_repo = TherapistPreferenceRepository(session)
@@ -325,7 +339,7 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
         account_repo = AccountRepository(session)
         account = await account_repo.get_by_telegram_id(user_id)
         if not account:
-            await message.answer("??????: ???????????? ?? ??????. ??????? /start")
+            await message.answer("Ошибка: пользователь не найден. Нажмите /start")
             return
 
     state = PrescreeningWizardState(
@@ -357,17 +371,17 @@ async def start_prescreening_for_edit(message: types.Message, user_id: int) -> N
     await save_wizard_state(state)
     set_prescreening_state(user_id, PrescreeningState(account_id=account.id, is_edit_mode=True))
     await message.answer(
-        "?? <b>?????????????? ??????</b>\n\n"
-        "??????? ??????? ????????? ?????? ?????????.\n\n"
-        "<b>??? ?? ?????? ?? ??? ???????????</b>\n"
-        f"(???????: {state.therapist_name})",
+        "📝 <b>Редактирование анкеты</b>\n\n"
+        "Давайте обновим настройки вашего психолога.\n\n"
+        "<b>Как вы хотите ко мне обращаться?</b>\n"
+        f"(текущее: {state.therapist_name})",
         reply_markup=build_skip_keyboard(),
     )
 
 
 @dispatcher.callback_query(F.data == "prescreen:skip_name")
 async def on_skip_name(callback: types.CallbackQuery) -> None:
-    await callback.answer("?????????")
+    await callback.answer("Пропущено")
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_therapist_name":
         return
@@ -378,14 +392,14 @@ async def on_skip_name(callback: types.CallbackQuery) -> None:
 async def on_gender_select(callback: types.CallbackQuery) -> None:
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_therapist_gender":
-        await callback.answer("?????????? ??????")
+        await callback.answer("Устаревшая кнопка")
         return
     gender = callback.data.split(":")[-1]
     state.therapist_gender = gender
     await save_wizard_state(state)
-    label = "???????" if gender == "female" else "???????"
-    await callback.answer(f"??????: {label}")
-    await callback.message.edit_text(f"<b>?????? ??? ?????????:</b> {label}")
+    label = sex_label(gender)
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Выбран пол психолога:</b> {label}")
     await _ask_patient_name(callback.message, state)
 
 
@@ -393,14 +407,14 @@ async def on_gender_select(callback: types.CallbackQuery) -> None:
 async def on_patient_sex_select(callback: types.CallbackQuery) -> None:
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_patient_sex":
-        await callback.answer("?????????? ??????")
+        await callback.answer("Устаревшая кнопка")
         return
     sex = callback.data.split(":")[-1]
     state.patient_sex = sex
     await save_wizard_state(state)
-    label = "???????" if sex == "male" else ("???????" if sex == "female" else "?? ??????")
-    await callback.answer(f"??????: {label}")
-    await callback.message.edit_text(f"<b>??? ???:</b> {label}")
+    label = sex_label(sex)
+    await callback.answer(f"Выбран: {label}")
+    await callback.message.edit_text(f"<b>Ваш пол:</b> {label}")
     await _ask_address_mode(callback.message, state)
 
 
@@ -408,14 +422,14 @@ async def on_patient_sex_select(callback: types.CallbackQuery) -> None:
 async def on_address_mode_select(callback: types.CallbackQuery) -> None:
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_address_mode":
-        await callback.answer("?????????? ??????")
+        await callback.answer("Устаревшая кнопка")
         return
     address_mode = callback.data.split(":")[-1]
     state.address_mode = address_mode
     await save_wizard_state(state)
-    label = "?? '??'" if address_mode == "informal" else "?? '??'"
-    await callback.answer(f"???????: {label}")
-    await callback.message.edit_text(f"<b>????? ?????????:</b> {label}")
+    label = address_mode_label(address_mode)
+    await callback.answer(f"Выбрано: {label}")
+    await callback.message.edit_text(f"<b>Стиль обращения:</b> {label}")
     await _ask_styles(callback.message, state)
 
 
@@ -423,7 +437,7 @@ async def on_address_mode_select(callback: types.CallbackQuery) -> None:
 async def on_style_toggle(callback: types.CallbackQuery) -> None:
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_styles_selection":
-        await callback.answer("?????????? ??????")
+        await callback.answer("Устаревшая кнопка")
         return
     style_id = callback.data.split(":")[-1]
     if style_id in state.selected_styles:
@@ -439,16 +453,16 @@ async def on_style_toggle(callback: types.CallbackQuery) -> None:
 async def on_styles_done(callback: types.CallbackQuery, dialogue_service: DialogueService) -> None:
     state = await get_wizard_state(callback.from_user.id)
     if not state or state.step != "awaiting_styles_selection":
-        await callback.answer("?????????? ??????")
+        await callback.answer("Устаревшая кнопка")
         return
     if not state.selected_styles:
-        await callback.answer("???????? ???? ?? ???? ?????")
+        await callback.answer("Выберите хотя бы один стиль")
         return
 
     state.step = "processing_completion"
     state.processing_started_at = datetime.utcnow()
     await save_wizard_state(state)
-    await callback.answer("??????!")
+    await callback.answer("Готово!")
     try:
         await callback.message.delete()
     except Exception:

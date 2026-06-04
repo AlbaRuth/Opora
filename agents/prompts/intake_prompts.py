@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from agents.prompts.intake_fallbacks import build_intake_fallback_response
 
 if TYPE_CHECKING:
-    from agents.intake.response_policy import TurnDirectives
+    from agents.intake.turn_directives import TurnDirectives
 
 
 class IntakePrompts:

@@ -77,21 +77,15 @@ logs/
 tmp/
 temp/
 exports/
-monitoring/exports/
-monitoring/traces/
 *.db
 *.sqlite
 *.sqlite3
 
 ################################################################################
-# Node / React monitor UI
+# Node (if added later)
 ################################################################################
 node_modules/
-monitoring/web/node_modules/
-monitoring/web/dist/
-monitoring/web/.vite/
 *.tsbuildinfo
-!monitoring/web/package-lock.json
 
 ################################################################################
 # Инструменты и IDE

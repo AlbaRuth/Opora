@@ -3,8 +3,6 @@
 Revision ID: 007
 Revises: 006
 Create Date: 2026-06-03
-
-Operational retention is configured by OBSERVABILITY_RETENTION_DAYS.
 """
 
 from alembic import op

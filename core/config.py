@@ -65,10 +65,6 @@ class Settings(BaseSettings):
     )
     intake_max_question_words: int = Field(default=25, alias="INTAKE_MAX_QUESTION_WORDS")
     intake_summary_max_words: int = Field(default=180, alias="INTAKE_SUMMARY_MAX_WORDS")
-    intake_emotion_eval_enabled: bool = Field(
-        default=True,
-        alias="INTAKE_EMOTION_EVAL_ENABLED",
-    )
     intake_min_response_sentences: int = Field(
         default=3,
         alias="INTAKE_MIN_RESPONSE_SENTENCES",
@@ -87,14 +83,6 @@ class Settings(BaseSettings):
         alias="INTAKE_MAX_USER_TURNS_MULTIPLIER",
     )
 
-    # Monitoring web service
-    monitoring_enabled: bool = Field(default=False, alias="MONITORING_ENABLED")
-    monitoring_api_token: str = Field(default="dev-monitor-token", alias="MONITORING_API_TOKEN")
-    monitoring_cors_origins: str = Field(
-        default="http://localhost:5173,http://127.0.0.1:5173",
-        alias="MONITORING_CORS_ORIGINS",
-    )
-    observability_retention_days: int = Field(default=90, alias="OBSERVABILITY_RETENTION_DAYS")
 
     @property
     def is_development(self) -> bool:
@@ -117,15 +105,6 @@ class Settings(BaseSettings):
     def intake_max_user_turns(self) -> int:
         """Hard cap on patient-side turns during intake: min × multiplier (.env)."""
         return self.intake_min_user_turns * self.intake_max_user_turns_multiplier
-
-    @property
-    def monitoring_cors_origins_list(self) -> list[str]:
-        """Parse comma-separated CORS origins for monitor UI."""
-        return [
-            origin.strip()
-            for origin in self.monitoring_cors_origins.split(",")
-            if origin.strip()
-        ]
 
 
 @lru_cache()

@@ -6,7 +6,6 @@ from typing import Any, Dict
 from core.config import get_settings
 from core.logging import get_logger, LogContexts
 from agents.prompts.evaluator_prompts import EvaluatorPrompts
-from agents.evaluators.dialogue_signal_analyzer import DialogueSignalAnalyzer
 from agents.evaluators.structured_outputs import (
     EmotionAssessmentResult,
     ResponseStrategyResult,
@@ -30,7 +29,6 @@ class TherapistEvaluator:
     def __init__(self):
         self.settings = get_settings()
         self.llm_gateway = LlmGateway()
-        self.signal_analyzer = DialogueSignalAnalyzer(self.llm_gateway)
     
     def _parse_response(self, response: Any) -> Any:
         """Parse LLM response without regex cleanup."""
@@ -85,24 +83,6 @@ class TherapistEvaluator:
             )
         except Exception as e:
             logger.warning("failed_to_log_agent_call", error=str(e))
-    
-    async def evaluate_client_reaction(
-        self,
-        patient_input: str,
-        user_id: int,
-        session_id: int | None = None,
-    ) -> bool:
-        """
-        Evaluate if patient is rejecting or deviating from topic.
-        Original logic from evaluation.py lines 156-180.
-        """
-        signal = await self.signal_analyzer.analyze(
-            patient_message=patient_input,
-            account_id=user_id,
-            session_id=session_id,
-            current_phase="therapy",
-        )
-        return signal.pushback_type != "none" or signal.advice_request or signal.question_stop
     
     async def assess_emotion(
         self,

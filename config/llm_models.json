@@ -41,19 +41,6 @@
       }
     },
     "evaluator": {
-      "evaluate_client_reaction": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.0,
-        "max_tokens": 5
-      },
-      "dialogue_signal_analysis": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.1,
-        "max_tokens": 260,
-        "top_p": 0.9,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0
-      },
       "assess_emotion": {
         "model": "google/gemma-4-26b-a4b-it:nitro",
         "temperature": 0.3,
@@ -84,45 +71,6 @@
         "temperature": 0.3,
         "max_tokens": 40
       }
-    },
-    "sandbox_patient": {
-      "auto_patient": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.92,
-        "max_tokens": 2000,
-        "top_p": 0.97,
-        "frequency_penalty": 0.15,
-        "presence_penalty": 0.2
-      },
-      "prescreening_profile_generation": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.9,
-        "max_tokens": 420,
-        "top_p": 0.97,
-        "frequency_penalty": 0.1,
-        "presence_penalty": 0.15
-      },
-      "scenario_generation": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.92,
-        "max_tokens": 720,
-        "top_p": 0.97,
-        "frequency_penalty": 0.1,
-        "presence_penalty": 0.2
-      }
-    },
-    "sandbox_judge": {
-      "intake_dialogue_judge": {
-        "model": "google/gemma-4-26b-a4b-it:nitro",
-        "temperature": 0.1,
-        "max_tokens": 2000,
-        "top_p": 0.9,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0,
-        "reasoning": {
-          "effort": "low"
-        }
-      }
     }
   },
   "logging": {
@@ -130,10 +78,5 @@
     "response_max_chars": 5000,
     "store_full_prompt": false,
     "store_prompt_variables": true
-  },
-  "sandbox": {
-    "auto_patient_context_messages": 2000,
-    "default_auto_run_turns": 3,
-    "max_auto_run_turns": 20
   }
 }

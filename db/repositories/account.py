@@ -50,7 +50,6 @@ class AccountRepository(BaseRepository[Account]):
         first_name: str | None = None,
         last_name: str | None = None,
         language_code: str | None = None,
-        origin: str = "telegram",
     ) -> Account:
         """Create new account from Telegram data with empty profiles."""
         # Create account
@@ -60,7 +59,6 @@ class AccountRepository(BaseRepository[Account]):
             first_name=first_name,
             last_name=last_name,
             language_code=language_code,
-            origin=origin,
         )
 
         # Create associated empty profiles
