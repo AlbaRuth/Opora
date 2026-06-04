@@ -109,7 +109,6 @@ OporaNew/
 - [x] `agents/prompts/therapist_prompts.py` — промпты ответов
 - [x] `agents/prompts/evaluator_prompts.py` — все промпты оценщика
 - [x] `agents/evaluators/therapist_evaluator.py` — полный evaluator:
-  - `evaluate_client_reaction()` — строки 156-180
   - `assess_emotion()` — строки 183-205
   - `update_response_strategy()` — строки 207-262
   - `evaluate_therapy_progress()` — строки 265-294

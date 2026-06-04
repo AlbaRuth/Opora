@@ -15,7 +15,7 @@ from core.llm_config import (
 from db.repositories import AgentLogRepository
 from db.session import get_db_session
 from integrations.openrouter import OpenRouterClient
-from observability.tracing import get_current_trace, serialize_prompt_messages
+from observability.tracing import serialize_prompt_messages
 
 LogWriter = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -101,8 +101,7 @@ class LlmGateway:
             )
         logging_config = self.llm_config.logging
         response_text = result.get("content", "") or ""
-        current_trace = get_current_trace()
-        store_full = logging_config.store_full_prompt or (current_trace and current_trace.channel == "sandbox")
+        store_full = logging_config.store_full_prompt
         serialized_messages = serialize_prompt_messages(messages)
         prompt_truncated = bool(prompt and len(prompt) > logging_config.prompt_max_chars)
         response_truncated = bool(response_text and len(response_text) > logging_config.response_max_chars)

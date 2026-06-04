@@ -45,8 +45,6 @@ class AgentLogRepository(BaseRepository[AgentLog]):
         turn_id: str | None = None,
         channel: str | None = None,
         source: str | None = None,
-        sandbox_run_id: int | None = None,
-        sandbox_batch_id: int | None = None,
         prompt_messages_full: list[dict[str, Any]] | None = None,
         response_full: str | None = None,
         prompt_truncated: bool = False,
@@ -66,8 +64,6 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             channel = channel or current_trace.channel
             source = source or current_trace.source
             session_id = session_id or current_trace.session_id
-            sandbox_run_id = sandbox_run_id or current_trace.sandbox_run_id
-            sandbox_batch_id = sandbox_batch_id or current_trace.sandbox_batch_id
 
         return await self.create(
             account_id=account_id,
@@ -76,8 +72,6 @@ class AgentLogRepository(BaseRepository[AgentLog]):
             turn_id=turn_id,
             channel=channel,
             source=source,
-            sandbox_run_id=sandbox_run_id,
-            sandbox_batch_id=sandbox_batch_id,
             agent_type=agent_type,
             task_name=task_name,
             model=model,

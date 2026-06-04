@@ -33,7 +33,6 @@ class Account(Base, TimestampMixin):
     first_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     language_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
-    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="telegram", index=True)
 
     # Relationships - one-to-one with profile entities
     user_profile: Mapped[Optional["UserProfile"]] = relationship(
@@ -74,4 +73,4 @@ class Account(Base, TimestampMixin):
     )
 
     def __repr__(self) -> str:
-        return f"<Account(id={self.id}, telegram_id={self.telegram_id}, origin={self.origin}, username={self.username})>"
+        return f"<Account(id={self.id}, telegram_id={self.telegram_id}, username={self.username})>"

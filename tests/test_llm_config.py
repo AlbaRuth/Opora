@@ -3,7 +3,6 @@ import json
 from core.llm_config import (
     LlmConfigResolver,
     load_llm_config,
-    llm_overrides_scope,
 )
 
 
@@ -31,8 +30,8 @@ def test_load_llm_config_merges_defaults_for_all_agent_tasks(tmp_path):
                     "therapist": {
                         "generate_response": {"max_tokens": 300},
                     },
-                    "sandbox_judge": {
-                        "intake_dialogue_judge": {"temperature": 0.1, "max_tokens": 2000},
+                    "evaluator": {
+                        "assess_emotion": {"temperature": 0.0, "max_tokens": 50},
                     },
                 },
             },
@@ -45,17 +44,17 @@ def test_load_llm_config_merges_defaults_for_all_agent_tasks(tmp_path):
     resolver = LlmConfigResolver(config)
 
     therapist = resolver.resolve("therapist", "generate_response")
-    judge = resolver.resolve("sandbox_judge", "intake_dialogue_judge")
+    evaluator = resolver.resolve("evaluator", "assess_emotion")
 
     assert therapist.model == "google/gemma-4-26b-a4b-it:nitro"
     assert therapist.temperature == 0.2
     assert therapist.max_tokens == 300
     assert therapist.top_p == 0.9
-    assert judge.temperature == 0.1
-    assert judge.max_tokens == 2000
+    assert evaluator.temperature == 0.0
+    assert evaluator.max_tokens == 50
 
 
-def test_resolver_applies_scoped_sandbox_override(tmp_path):
+def test_resolver_applies_runtime_override(tmp_path):
     config_path = tmp_path / "llm.json"
     config_path.write_text(
         json.dumps(
@@ -66,8 +65,8 @@ def test_resolver_applies_scoped_sandbox_override(tmp_path):
                     "max_tokens": 100,
                 },
                 "agents": {
-                    "sandbox_patient": {
-                        "auto_patient": {"temperature": 0.8, "max_tokens": 220},
+                    "therapist": {
+                        "generate_response": {"temperature": 0.8, "max_tokens": 220},
                     }
                 },
             }
@@ -76,19 +75,20 @@ def test_resolver_applies_scoped_sandbox_override(tmp_path):
     )
     resolver = LlmConfigResolver(load_llm_config(config_path))
 
-    with llm_overrides_scope(
-        {
-            "sandbox_patient": {
-                "auto_patient": {
+    resolved = resolver.resolve(
+        "therapist",
+        "generate_response",
+        overrides={
+            "therapist": {
+                "generate_response": {
                     "temperature": 0.55,
-                    "config_source": "sandbox_run_override",
+                    "config_source": "runtime_override",
                 }
             }
-        }
-    ):
-        resolved = resolver.resolve("sandbox_patient", "auto_patient")
+        },
+    )
 
     assert resolved.model == "google/gemma-4-26b-a4b-it:nitro"
     assert resolved.temperature == 0.55
     assert resolved.max_tokens == 220
-    assert resolved.config_source == "sandbox_run_override"
+    assert resolved.config_source == "runtime_override"

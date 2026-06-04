@@ -17,11 +17,6 @@ openai>=1.0.0
 # Telegram
 aiogram>=3.0.0
 
-# Monitoring web API
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-
-# Observability
 # Testing (optional)
 pytest>=7.0.0
 pytest-asyncio>=0.21.0

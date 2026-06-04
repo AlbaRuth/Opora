@@ -45,25 +45,6 @@ Return your answer strictly in JSON format, like this:
 }}
 """
 
-    # Client reaction evaluation prompt (original lines 156-174)
-    CLIENT_REACTION = """##Role:
-You are a professional and empathetic psychological counselor. 
-##Task:
-Based on the patient input: {patient_input}, determine whether the patient shows resistance or has significantly deviated from the consultation topic.
-##Criteria:
-Below are just some main criteria (other reasonable standards can also be referred to).
-1. indicators that clearly reject the current topic:
-  - directly reject the consultant's advice or questions
-  - show obvious impatience
-  - express a direct refusal or unwillingness to continue the conversation
-2. indicators that significantly deviate from the consultation topic:
-  - suddenly introducing a completely unrelated new topic
-  - the response content has no logical connection with the current discussion issue
-  - using expressions that obviously shift the topic 
-##Constraints:
-Directly output a Boolean value True or False.
-"""
-
     # Response strategy prompt (original lines 207-257)
     # UPDATED: Replaced problematic strategies with therapeutic ones aligned with professional ethics
     @staticmethod

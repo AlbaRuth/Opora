@@ -17,7 +17,7 @@ expressions, substring matching, or language-specific phrase triggers.
 
 - Enum values and schema field names.
 - API paths, UI labels, database column names, and task names.
-- Deterministic state-machine steps such as sandbox prescreening field order.
+- Deterministic state-machine steps such as prescreening field order.
 - Numeric limits and config defaults.
 - Infrastructure fallback messages when LLM, database, or provider calls fail.
 - JSON extraction and schema validation that do not interpret user meaning.
@@ -30,4 +30,4 @@ expressions, substring matching, or language-specific phrase triggers.
 - Prompt variables and structured outputs are logged through `LlmGateway`.
 - Tests cover schema validation and policy mapping without phrase-trigger fixtures.
 - Static check is reviewed for new `KEYWORDS`, `patient_message.lower()`, and regex
-  usage in `agents`, `services`, `monitoring`, and `core`.
+  usage in `agents`, `services`, and `core`.

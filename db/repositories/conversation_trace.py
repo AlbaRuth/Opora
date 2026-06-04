@@ -36,8 +36,6 @@ class ConversationTraceRepository(BaseRepository[ConversationTrace]):
             session_id=trace.session_id,
             channel=trace.channel,
             source=trace.source,
-            sandbox_run_id=trace.sandbox_run_id,
-            sandbox_batch_id=trace.sandbox_batch_id,
             status=status,
             started_at=trace.started_at,
             finished_at=finished_at,

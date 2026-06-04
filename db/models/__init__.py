@@ -5,7 +5,7 @@ New schema organization:
 - profile: user_profiles, therapist_preferences (user preferences)
 - clinical: clinical_profiles (medical data)
 - therapy: therapy_sessions, intake_states, messages, decision_logs
-- observability: agent_logs
+- observability: agent_logs, conversation_traces
 """
 
 from .base import Base, TimestampMixin
@@ -30,10 +30,6 @@ from .decision_log import DecisionLog
 # Observability schema
 from .agent_log import AgentLog
 from .conversation_trace import ConversationTrace
-from .patient_template import PatientTemplateModel
-from .sandbox_batch import SandboxBatch
-from .sandbox_run import SandboxRun
-from .sandbox_turn import SandboxTurn
 
 __all__ = [
     # Base
@@ -55,8 +51,4 @@ __all__ = [
     # Observability
     "AgentLog",
     "ConversationTrace",
-    "PatientTemplateModel",
-    "SandboxBatch",
-    "SandboxRun",
-    "SandboxTurn",
 ]

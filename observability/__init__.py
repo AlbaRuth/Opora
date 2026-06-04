@@ -1,4 +1,4 @@
-"""Shared observability primitives for production and monitor services."""
+"""Shared observability primitives for production tracing and agent logs."""
 
 from observability.tracing import (
     TraceContext,

@@ -1,28 +1,26 @@
 # Database Schema
 
-Opora использует PostgreSQL и Alembic. Схема разделена по контекстам, чтобы Telegram, Sandbox и Monitor могли работать независимо, но иметь общую observability-картину.
+Opora использует PostgreSQL и Alembic. Схема разделена по контекстам для Telegram-бота и observability.
 
 ## Schemas
 
-- `identity`: root accounts and channel origin.
+- `identity`: root accounts (Telegram users).
 - `profile`: user profile and therapist preferences.
 - `clinical`: clinical card.
 - `therapy`: sessions, messages, intake state, decisions.
-- `observability`: LLM calls, end-to-end traces, sandbox runs/turns/templates.
+- `observability`: LLM calls and end-to-end traces.
 
 ## identity.accounts
 
 Ключевые поля:
 
 - `id`: internal account id.
-- `telegram_id`: external Telegram id or synthetic sandbox id.
-- `origin`: `telegram` или `sandbox`; Monitor source filter должен использовать это поле.
+- `telegram_id`: external Telegram id (unique).
 - `username`, `first_name`, `last_name`, `language_code`.
 
 Индексы:
 
 - `telegram_id`
-- `origin`
 
 ## therapy
 
@@ -70,7 +68,7 @@ Opora использует PostgreSQL и Alembic. Схема разделена 
 
 ### observability.conversation_traces
 
-Один user-visible turn. Связывает message, decisions, LLM calls и sandbox turn.
+Один user-visible turn. Связывает message, decisions и LLM calls.
 
 Ключевые поля:
 
@@ -94,7 +92,7 @@ Opora использует PostgreSQL и Alembic. Схема разделена 
 
 Ключевые поля:
 
-- `trace_id`, `turn_id`, `channel`
+- `trace_id`, `turn_id`, `channel`, `source`
 - `account_id`, `session_id`
 - `agent_type`, `task_name`, `model`, `temperature`, `max_tokens`
 - `prompt`, `prompt_messages`, `response`, `reasoning`, `reasoning_summary`
@@ -106,38 +104,6 @@ Opora использует PostgreSQL и Alembic. Схема разделена 
 - `ix_agent_logs_trace_created(trace_id, created_at)`
 - `trace_id`, `turn_id`, `channel`
 
-### observability.sandbox_runs
-
-Sandbox session metadata.
-
-Ключевые поля:
-
-- `account_id`, `session_id`, `patient_template_id`
-- `name`, `status`, `model_config`, `metadata`
-- `stopped_at`, `stop_reason`
-
-### observability.sandbox_turns
-
-Patient/assistant pair inside one sandbox run.
-
-Ключевые поля:
-
-- `run_id`, `turn_number`
-- `trace_id -> observability.conversation_traces.trace_id ON DELETE SET NULL`
-- `patient_message`, `assistant_message`, `latency_ms`, `metadata`
-
-Constraints:
-
-- `UNIQUE(run_id, turn_number)`
-
-### observability.patient_templates
-
-Reusable auto-patient persona.
-
-Constraints:
-
-- `UNIQUE(name, version)`
-
 ## Trace Linkage
 
 Runtime flow:
@@ -146,15 +112,6 @@ Runtime flow:
 2. `MessageRepository` и `DecisionLogRepository` берут active `trace_id`.
 3. `LlmGateway` пишет `agent_logs` и аккумулирует tokens/cost в trace context.
 4. `ConversationTraceRepository` сохраняет агрегаты после завершения хода.
-5. Sandbox turn сохраняет `trace_id`, чтобы UI мог открыть detail одним кликом.
-
-## Retention
-
-Retention управляется `OBSERVABILITY_RETENTION_DAYS` (default `90`). На текущем этапе purge/archive выполняется отдельной эксплуатационной задачей поверх:
-
-- `observability.agent_logs`
-- `observability.conversation_traces`
-- `observability.sandbox_turns`
 
 Prompt/response хранятся с truncation flags в `metadata`; лимиты задаются в `config/llm_models.json`.
 
@@ -167,18 +124,3 @@ Prompt/response хранятся с truncation flags в `metadata`; лимиты
 ```
 
 Исторические миграции не переписываются без отдельного решения о squash.
-# Sandbox Metadata Update
-
-`observability.sandbox_runs.metadata` stores non-production sandbox context:
-
-- `start_phase`: `prescreening`, `intake`, or `therapy`.
-- `prescreening_mode`: `manual` or `ai_generated`.
-- `manual_prescreening_profile`: profile supplied by UI/API.
-- `generated_prescreening_profile`: JSON returned by `sandbox_patient.prescreening_profile_generation`.
-- `effective_prescreening_profile`: profile actually written to profile tables.
-- `generated_scenario`: JSON returned by `sandbox_patient.scenario_generation`.
-- `prescreening_step` and `prescreening_completed`: sandbox prescreening wizard state.
-- `model_overrides`: scoped sandbox model overrides.
-
-`observability.patient_templates` is retained for legacy runs only. New generated patient
-flows use metadata-driven prescreening profile and scenario generation instead of templates.
